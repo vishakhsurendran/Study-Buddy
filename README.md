@@ -1,1 +1,1 @@
-# Senior-Project
+# Study Buddy!
