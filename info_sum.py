@@ -1,74 +1,55 @@
 '''
 Function that takes in text and returns summarized notes, with bulletpoints and appropriate title and sections
-
-Possible models:
-https://huggingface.co/facebook/bart-large-cnn
-https://huggingface.co/google/pegasus-xsum
 '''
 
-from transformers import BartTokenizer, BartForConditionalGeneration, pipeline
+from huggingface_hub import InferenceClient
+from huggingface_hub import login
+from dotenv import load_dotenv
+import os
 
-def summarize(t: str) -> str:
-    #tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
-    #model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
-    summarizer = pipeline(
-        "text-generation",
-        model="google/flan-t5-base",
-        device=-1  # CPU
-    )
-
+def summarize(t: str) -> str:    
     prompt = f"""
-    You are an expert teaching assistant.
-    Summarize the following course material into concise study notes.
+    You are an expert academic assistant.
 
-    Requirements:
-    - Use clear section headers
-    - Use bullet points
-    - Highlight definitions and key ideas
-    - Avoid unnecessary wording
-    - Keep it student-friendly
+Convert the following course material into **well-formatted LaTeX notes**.
 
-    Text:
-    {t}
+Rules:
+- Use \\section{{}}, \\subsection{{}}, and \\subsubsection{{}} for headings
+- Use itemize environments for bullet points
+- Include formulas in proper LaTeX math mode ($...$ for inline, $$...$$ for display)
+- Keep bullet points short and precise (avoid paragraphs)
+- Avoid repetition and redundant rephrasing
+- Do not invent new information
+- No not include exercises
+- Keep the notes student-friendly
+
+Text:
+{t}
+
+Output:
     """
-
-    out = summarizer(
-        prompt,
-        max_new_tokens=180,
-        do_sample=False
-    )[0]["generated_text"]
-    return out
-
-    tokenizer = BartTokenizer.from_pretrained("google/pegasus-xsum")
-    model = BartForConditionalGeneration.from_pretrained("google/pegasus-xsum")
-
-    prompt = (
-        "Below are lecture notes from various sources. "
-        "Please produce a short, bullet‑point summary:\n\n"
-    )
-    # 3️⃣ Tokenize (truncate if > 1024 tokens)
-    inputs = tokenizer(
-        prompt + t,
-        max_length=1024,
-        truncation=True,
-        return_tensors="pt",
+    
+    client = InferenceClient(
+        provider="featherless-ai",
+        api_key=os.environ["HF_TOKEN"],
     )
 
-    # 4️⃣ Generate summary
-    summary_ids = model.generate(
-        inputs["input_ids"],
-        num_beams=4,              # improves fluency
-        max_length=200,           # enough for a few bullet points
-        early_stopping=True,      # stop once all beams hit </s>
-        do_sample=False,          # beam search is deterministic
-        eos_token_id=tokenizer.eos_token_id
+    completion = client.chat.completions.create(
+        model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", # https://huggingface.co/models?inference_provider=featherless-ai&sort=trending
+        messages=[
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ],
     )
 
-    # 5️⃣ Decode & print
-    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    return summary
+    return str(completion.choices[0].message.content)
 
 if __name__ == '__main__':
+    load_dotenv()
+    hfToken = os.getenv("HF_TOKEN")
+    login(token=hfToken)
     sampleText = """Newton's Laws of Motion
 Sir Isaac Newton's laws of motion explain the relationship between a physical object and the forces acting upon it. Understanding this information provides us with the basis of modern physics.
 
@@ -137,4 +118,8 @@ The motion of lift from an airfoil, the air is deflected downward by the airfoil
 The motion of a spinning ball, the air is deflected to one side, and the ball reacts by moving in the opposite direction.
 The motion of a jet engine produces thrust and hot exhaust gases flow out the back of the engine, and a thrusting force is produced in the opposite direction.
 Review Newton's Laws of Motion"""
+
+    sampleText = '''
+1.1 Metric and Normed Spaces Definition 1.1. A metric space is a pair (X,d), where X is a set and d is a function from X×X to R such that the following conditions hold for every x,y,z ∈ X. 1. Non-negativity: d(x,y) ≥ 0. 2. Symmetry: d(x,y) = d(y,x). 3. Triangle inequality: d(x,y) + d(y,z) ≥ d(x,z) . 4. d(x,y) = 0 if and only if x = y. Elements of X are called points of the metric space, and d is called a metric or distance function on X. Exercise 1. Prove that condition 1 follows from conditions 2–4. Occasionally, spaces that we consider will not satisfy condition 4. We will call such spaces semi-metric spaces. Definition 1.2. A space (X,d) is a semi-metric space if it satisfies conditions 1-3 and 4′: 4′. if x = y then d(x,y) = 0. Examples. Here are several examples of metric spaces. 1. Euclidean Space. Space Rd equipped with the Euclidean distance d(x,y) = ∥x−y∥2. 2. Uniform Metric. Let X be an arbitrary non-empty set. Define a distance function d(x,y) on X by d(x,y) = 1 if x ̸ = y and d(x,x) = 0. The space (X,d) is called a uniform or discrete metric space. 13. Shortest Path Metric on Graphs. Let G = (V,E,l) be a graph with positive edge lengths l(e). Let d(u,v) be the length of the shortest path between u and v. Then (V,d) is the shortest path metric on G. 4. Tree Metrics. A very important family of graph metrics is the family of tree metrics. A tree metric is the shortest path metric on a tree T. 5. Cut Semi-metric. Let V be a set of vertices and S ⊂ V be a proper subset of V. Cut semi-metric δS is defined by δS(x,y) = 1 if x ∈ S and y /∈ S, or x /∈ S and y ∈ S; and δS(x,y) = 0, otherwise. In general, the space (X,d) is not a metric since d(x,y) = 0 for some x ̸ = y. Nevertheless, δS(x,y) is often called a cut metric. We will discuss balls in metric spaces– a natural analogue of the familiar notion from Euclidean spaces. Definition 1.3. Let (X,d) be a metric space, x0 ∈ X and r > 0. The (closed) ball of radius r around x0 is Br(x0) = Ballr(x0) = {x : d(x,x0) ≤ r}. Definition 1.4. A normed space is a pair (V,∥·∥), where V is a linear space (vector space) and ∥·∥ : V →R is a norm on V such that the following conditions hold for every x,y ∈ V. 1. ∥x∥ > 0 if x ̸ = 0. 2. ∥x∥ = 0 if and only if x = 0. 3. ∥αx∥ = |α|·∥x∥ for every α ∈ R. 4. ∥x+y∥ ≤∥x∥+∥y∥ (convexity). Every normed space (V,∥ · ∥) is a metric space with metric d(x,y) = ∥x − y∥ on V. Definition 1.5. We say that a sequence of points xi in a metric space is a Cauchy sequence if lim i→∞ sup j≥i d(xi, xj) = 0. A metric space is complete if every Cauchy sequence has a limit. A Banach space is a complete normed space. Remark 1.6. Every finite dimensional normed space is a Banach space. However, an inf inite dimensional normed space may or may not be a Banach space. That said, all spaces we discuss in this course will be Banach spaces. Further, for every normed (metric) space V there exists a Banach (complete) space V′ that contains it such that V is dense in V′. Here is an example of a non-complete normed space. Let V be the space of infinite sequences a(1),a(2),...,a(n),... in which only a finite number of terms a(i) are non-zero. Define ∥a∥ = ∞ i=1 |a(i)|. Then (V,∥ · ∥) is a normed space but it is not complete, and thus (V,∥·∥) is not a Banach space. To see that, define a sequence ai of elements in V as follows: ai(n) = 1/2n if n ≤ i and ai(n) = 0, otherwise. Then ai is a Cauchy sequence but it has no limit in V . Space ℓ1, which we will define in the next section, is the completion of (V,∥ · ∥).
+'''
     print(summarize(sampleText))
