@@ -2,8 +2,8 @@ import logging
 from typing import Dict, Any, List
 from pathlib import Path
 
-from resource_intake import ResourceIntake
-from file_storage import StorageManager
+from backend.resource_intake import ResourceIntake
+from backend.file_storage import StorageManager
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
