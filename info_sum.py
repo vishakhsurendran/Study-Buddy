@@ -7,6 +7,8 @@ from huggingface_hub import login
 from dotenv import load_dotenv
 import os
 
+load_dotenv()
+
 def summarize(t: str) -> str:    
     prompt = f"""
     You are an expert academic assistant.
