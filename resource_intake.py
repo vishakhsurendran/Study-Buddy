@@ -1,7 +1,9 @@
+# resource_intake.py
 import os
 import logging
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 
 import fitz  # pymupdf
 from docx import Document as DocxDocument
@@ -14,19 +16,48 @@ logging.basicConfig(level=logging.INFO)
 
 class ResourceIntake:
     @staticmethod
-    def simple_chunker(text: str, max_words: int = 200, overlap: int = 40) -> List[str]:
-        words = text.split()
-        if len(words) <= max_words:
-            return [text]
-        chunks = []
-        start = 0
-        while start < len(words):
-            end = min(start + max_words, len(words))
-            chunks.append(" ".join(words[start:end]))
-            if end == len(words):
-                break
-            start = end - overlap
+    def _sentence_split(text: str) -> List[str]:
+        if not text:
+            return []
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        if len(sentences) == 0:
+            return [text.strip()]
+        return [s.strip() for s in sentences if s.strip()]
+
+    @staticmethod
+    def chunk_text(text: str, max_words: int = 200, overlap_sentences: int = 0) -> List[str]:
+        if not text:
+            return []
+        sentences = ResourceIntake._sentence_split(text)
+        chunks: List[str] = []
+        cur_sentences: List[str] = []
+        cur_words = 0
+
+        for sent in sentences:
+            w = len(sent.split())
+            if cur_words + w <= max_words or not cur_sentences:
+                cur_sentences.append(sent)
+                cur_words += w
+            else:
+                chunks.append(" ".join(cur_sentences).strip())
+                if overlap_sentences and overlap_sentences < len(cur_sentences):
+                    cur_sentences = cur_sentences[-overlap_sentences:].copy()
+                else:
+                    cur_sentences = []
+                cur_words = sum(len(s.split()) for s in cur_sentences)
+                cur_sentences.append(sent)
+                cur_words += w
+
+        if cur_sentences:
+            chunks.append(" ".join(cur_sentences).strip())
+
         return chunks
+
+    @staticmethod
+    def simple_chunker(text: str, max_words: int = 200, overlap: int = 40) -> List[str]:
+        words_per_sentence = 15
+        overlap_sentences = max(0, int(overlap / words_per_sentence))
+        return ResourceIntake.chunk_text(text, max_words=max_words, overlap_sentences=overlap_sentences)
 
     @staticmethod
     def extract_docx(path: str, chunk_words: int = 200, overlap: int = 40) -> List[Dict[str, Any]]:
@@ -120,3 +151,4 @@ class ResourceIntake:
             return ResourceIntake.extract_pdf(path, **kwargs)
         logger.warning("Unsupported file type: %s", ext)
         return []
+    

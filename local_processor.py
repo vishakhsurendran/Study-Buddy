@@ -5,7 +5,7 @@ from processing import process_file_bytes, get_file_chunks
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python process_local.py /path/to/file.pdf")
+        print("Usage: python local_processor.py /path/to/file.pdf")
         return
     p = Path(sys.argv[1])
     if not p.exists():
@@ -27,3 +27,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
