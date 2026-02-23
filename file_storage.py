@@ -87,11 +87,6 @@ class StorageManager:
         conn.close()
 
     def save_file_from_bytes(self, file_bytes: bytes, original_name: str, content_type: str = "") -> Dict[str, Any]:
-        """
-        Register the file in the DB but DO NOT persist a copy to disk.
-        Returns metadata dict including file_id. 'stored_path' will be None because
-        we don't store the original file in data/.
-        """
         size = len(file_bytes)
         conn = self._conn()
         c = conn.cursor()
