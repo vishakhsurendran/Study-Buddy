@@ -3,6 +3,7 @@ from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
 import os
 import logging
+from typing import Any
 
 load_dotenv()
 
@@ -10,96 +11,228 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 HF_TOKEN = os.getenv("HF_TOKEN")
-if not HF_TOKEN:
-    logger.warning("HF_TOKEN not set - summarization will fail until you set HF_TOKEN in env or .env")
 
-DEFAULT_MODEL = os.getenv("SUMMARIZER_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
+DEFAULT_MODEL = os.getenv(
+    "SUMMARIZER_MODEL",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+)
+
+FALLBACK_MODEL = os.getenv(
+    "SUMMARIZER_MODEL_FALLBACK",
+    "mistralai/Mistral-7B-Instruct-v0.3"
+)
+
 DEFAULT_PROVIDER = os.getenv("HF_PROVIDER", None)
 
 
+# ---------------------------
+# CLIENT
+# ---------------------------
+
 def _make_client():
     if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN not set. Please set HF_TOKEN in your environment or .env")
+        raise RuntimeError("HF_TOKEN not set.")
     if DEFAULT_PROVIDER:
         return InferenceClient(provider=DEFAULT_PROVIDER, api_key=HF_TOKEN)
     return InferenceClient(api_key=HF_TOKEN)
 
 
-def summarize_text(
-    text: str,
-    *,
-    output_format: str = "latex",
-    max_tokens: int = 2000,
-    temperature: float = 0.2,
-    target_words: int = None,
-) -> str:
-    """
-    Summarize `text` and return a string in the requested format.
-    - output_format: 'latex' or 'markdown'
-    - max_tokens: token budget for the model call
-    - target_words: optional target word count guidance for the model (the prompt instructs the model)
-    """
+# ---------------------------
+# EXTRACTION
+# ---------------------------
 
-    client = _make_client()
-    output_format = output_format.lower()
-    if output_format not in ("markdown", "latex"):
-        raise ValueError("output_format must be 'markdown' or 'latex'")
-
-    if output_format == "latex":
-        system_prompt = (
-            "You are an expert academic assistant. Produce high-quality LaTeX lecture/notes.\n"
-            "STRICT RULES:\n"
-            "- Output only valid LaTeX (use \\section{}, \\subsection{}, \\subsubsection{}, itemize, math mode $...$ or $$...$$).\n"
-            "- Keep bullet points concise and numbered/segmented where appropriate.\n"
-            "- When referencing a provenance header (SOURCE: filename | page: N | chunk: K) include a short comment like % (filename, p.N).\n"
-            "- Do NOT invent facts. If unsure, skip or mark it as uncertain in a short comment.\n"
-        )
-    else:
-        system_prompt = (
-            "You are an expert academic assistant. Produce concise Markdown notes.\n"
-            "STRICT RULES:\n"
-            "- Use headings #, ##, ### and itemize for bullets.\n"
-            "- Include LaTeX math using $...$ or $$...$$ when needed.\n"
-            "- After points referencing provenance, add a short parenthetical like (filename, p.N).\n"
-            "- Do NOT invent facts."
-        )
-
-    # Provide optional target size guidance to the model
-    size_guidance = ""
-    if target_words:
-        # guidance asks model to aim for target words (±20%) and to proportion output by important sections
-        size_guidance = (
-            f"\nGoal: produce approximately {target_words} words of {output_format.upper()} notes (±20%). "
-            "Distribute length proportionally across the source material: more important/longer sections get more coverage. "
-            "Do not add unrelated content."
-        )
-
-    user_prompt = (
-        "Below are labeled chunks. Each chunk begins with a provenance header:\n"
-        "  SOURCE: <filename> | page: <N> | chunk: <K>\n\n"
-        "Follow the system instructions. Produce the final notes in the requested format.\n\n"
-        f"{size_guidance}\n\n"
-        "Text:\n\n"
-        + text
-    )
+def _extract_text_from_completion(completion: Any) -> str:
 
     try:
+        if hasattr(completion, "choices"):
+            choices = completion.choices
+            if choices and hasattr(choices[0], "message"):
+                return str(choices[0].message.content)
+            if choices and hasattr(choices[0], "text"):
+                return str(choices[0].text)
+    except Exception:
+        pass
+
+    try:
+        if isinstance(completion, dict):
+            return str(completion["choices"][0]["message"]["content"])
+    except Exception:
+        pass
+
+    try:
+        if hasattr(completion, "generated_text"):
+            return str(completion.generated_text)
+    except Exception:
+        pass
+
+    return ""
+
+
+# ---------------------------
+# LATEX CLEANER
+# ---------------------------
+
+def clean_latex(text: str) -> str:
+
+    if not text.strip():
+        return ""
+
+    # remove markdown fences
+    text = text.replace("```latex", "")
+    text = text.replace("```", "")
+
+    # ensure valid document structure
+    if "\\begin{document}" not in text:
+
+        text = (
+            "\\documentclass{article}\n"
+            "\\usepackage{amsmath}\n"
+            "\\usepackage{amssymb}\n"
+            "\\usepackage{graphicx}\n"
+            "\\usepackage{hyperref}\n\n"
+            "\\begin{document}\n\n"
+            + text +
+            "\n\n\\end{document}"
+        )
+
+    return text
+
+
+# ---------------------------
+# MODEL CALL
+# ---------------------------
+
+def _call_model(
+    client,
+    model,
+    system_prompt,
+    user_prompt,
+    temperature,
+    max_tokens,
+):
+
+    try:
+
         completion = client.chat.completions.create(
-            model=DEFAULT_MODEL,
+
+            model=model,
+
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+
             temperature=temperature,
             max_tokens=max_tokens,
         )
 
-        out = completion.choices[0].message.content
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", errors="replace")
-        return str(out)
+        text = _extract_text_from_completion(completion)
+
+        return text.strip()
 
     except Exception as e:
-        logger.exception("LLM call failed: %s", e)
-        raise
-    
+
+        logger.exception("Model failed: %s", e)
+
+        return ""
+
+
+# ---------------------------
+# MAIN SUMMARIZER
+# ---------------------------
+
+def summarize_text(
+
+    text: str,
+
+    output_format="latex",
+
+    max_tokens=4000,
+
+    temperature=0.1,
+
+):
+
+    client = _make_client()
+
+    if not text.strip():
+
+        return "% No input text"
+
+
+    if output_format == "latex":
+
+        system_prompt = """
+
+You are a professional academic LaTeX writer.
+
+CRITICAL REQUIREMENTS:
+
+Output ONLY valid LaTeX.
+
+DO NOT output markdown.
+
+DO NOT output explanation.
+
+DO NOT output code fences.
+
+USE:
+
+\\section{}
+\\subsection{}
+\\begin{itemize}
+
+Include math using $ $
+
+Write lecture-style notes.
+
+Never say "no content".
+
+Always produce output.
+
+"""
+    else:
+        system_prompt = """
+Produce structured markdown notes.
+Use headings and bullet points.
+
+"""
+    user_prompt = f"""
+Summarize the following CONTENT blocks into structured notes.
+{text}
+"""
+
+    # PRIMARY
+    result = _call_model(
+        client,
+        DEFAULT_MODEL,
+        system_prompt,
+        user_prompt,
+        temperature,
+        max_tokens,
+    )
+
+    if result:
+        return clean_latex(result) if output_format == "latex" else result
+
+    # FALLBACK
+    logger.warning("Primary failed. Using fallback model.")
+
+    result = _call_model(
+        client,
+        FALLBACK_MODEL,
+        system_prompt,
+        user_prompt,
+        temperature=0,
+        max_tokens=max_tokens,
+    )
+
+    if result:
+        return clean_latex(result) if output_format == "latex" else result
+
+    # FINAL HARD FALLBACK
+    logger.error("All models failed.")
+    return clean_latex("""
+\\section{Summary}
+No content could be generated automatically.
+""")
