@@ -1,8 +1,9 @@
+# exec.py
 import sys
 from pathlib import Path
 from processing import process_file_bytes, get_file_chunks
 from connector import summarize_multiple_files
-from export_utils import write_markdown, try_make_pdf_from_markdown
+from export_utils import write_latex, try_make_pdf_from_latex
 import time
 import logging
 
@@ -11,7 +12,7 @@ logger.setLevel(logging.INFO)
 
 EXPORT_DIR = "data/exports"
 
-def run(files):
+def run(files, target_ratio: float = 0.12):
     processed_file_ids = []
     for p in files:
         p = Path(p)
@@ -27,10 +28,10 @@ def run(files):
         print("No files processed. Exiting.")
         return
 
-    # Summarize all processed files and produce a combined summary
-    res = summarize_multiple_files(processed_file_ids, output_format="markdown", batch_words=1200, hierarchical=True)
+    # Summarize all processed files and produce a combined summary in LaTeX
+    res = summarize_multiple_files(processed_file_ids, output_format="latex", batch_words=1200, hierarchical=True, target_ratio=target_ratio)
 
-    # Export per-file summaries
+    # Export per-file summaries as .tex -> .pdf
     for per in res["per_file"]:
         fid = per["file_id"]
         file_meta = None
@@ -42,23 +43,25 @@ def run(files):
             pass
         name = (file_meta and file_meta.get("original_name")) or f"file_{fid}"
         safe_name = Path(name).stem
-        md_path = write_markdown(per["summary"], EXPORT_DIR, f"{safe_name}_summary_{int(time.time())}")
-        pdf_path = try_make_pdf_from_markdown(md_path)
+        ts = int(time.time())
+        tex_path = write_latex(per["summary"], EXPORT_DIR, f"{safe_name}_summary_{ts}")
+        pdf_path = try_make_pdf_from_latex(tex_path)
         print(f"Exported per-file summary for {name}:")
-        print("  MD:", md_path)
+        print("  TEX:", tex_path)
         print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
 
     # Export combined
     combined = res["combined"]["summary"]
-    md_path = write_markdown(combined, EXPORT_DIR, f"combined_summary_{int(time.time())}")
-    pdf_path = try_make_pdf_from_markdown(md_path)
+    ts = int(time.time())
+    tex_path = write_latex(combined, EXPORT_DIR, f"combined_summary_{ts}")
+    pdf_path = try_make_pdf_from_latex(tex_path)
     print("Exported combined summary:")
-    print("  MD:", md_path)
+    print("  TEX:", tex_path)
     print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python multi_runner.py file1.pdf file2.docx ...")
+        print("Usage: python exec.py file1.pdf file2.docx ...")
         sys.exit(1)
     run(sys.argv[1:])
     
