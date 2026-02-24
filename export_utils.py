@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 import logging
+import subprocess
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -34,3 +36,55 @@ def try_make_pdf_from_markdown(md_path: str) -> str:
 
     # If both fail, return empty string
     return ""
+
+def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) -> None:
+    # first, clean up latex
+    lt_text = clean_latex(lt_text)
+    # then try and create pdf from latex
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tex_path = os.path.join(tmpdir, "doc.tex")
+
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write(lt_text)
+
+        result = subprocess.run(
+            ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "doc.tex"],
+            cwd=tmpdir,
+            check=True
+        )
+
+        # print("STDOUT:\n", result.stdout)
+        # print("STDERR:\n", result.stderr)
+
+        if result.returncode != 0:
+            raise RuntimeError("LaTeX compilation failed")
+
+        pdf_path = os.path.join(tmpdir, "doc.pdf")
+        os.makedirs(out_dir, exist_ok=True)
+        final_pdf_path = Path(out_dir) / f"{filename_prefix}.pdf"
+        os.rename(pdf_path, final_pdf_path)
+
+def clean_latex(lt_text: str) -> str:
+    lt_text = lt_text.strip()
+    idx = lt_text.find("```")
+    if idx == -1:
+        pass
+    else:
+        lt_text = lt_text[idx:]
+    if lt_text.startswith("```"):
+        lt_text = lt_text.split("\n", 1)[1]
+    if lt_text.endswith("```"):
+        lt_text = lt_text.rsplit("\n", 1)[0]
+    if r"\usepackage{amssymb}" not in lt_text:
+        lt_text = lt_text.replace(
+            r"\usepackage{amsmath}",
+            r"\usepackage{amsmath}" + "\n" + r"\usepackage{amssymb}"
+        )
+    if r'\usepackage{fontspec}' not in lt_text:
+        lt_text = lt_text.replace(
+            r"\usepackage{amsmath}", 
+            r"\usepackage{amsmath}" + "\n" + r'\usepackage{fontspec}'
+        )
+    if r'\end{document}' not in lt_text:
+        lt_text += r'\end{document}'
+    return lt_text.strip()

@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 from processing import process_file_bytes, get_file_chunks
 from connector import summarize_multiple_files
-from export_utils import write_markdown, try_make_pdf_from_markdown
+from export_utils import write_markdown, try_make_pdf_from_markdown, try_make_pdf_from_latex
 import time
 import logging
 
@@ -13,6 +13,7 @@ EXPORT_DIR = "data/exports"
 
 def run(files):
     processed_file_ids = []
+    out_format = 'latex'
     for p in files:
         p = Path(p)
         print("Processing:", p)
@@ -28,7 +29,7 @@ def run(files):
         return
 
     # Summarize all processed files and produce a combined summary
-    res = summarize_multiple_files(processed_file_ids, output_format="markdown", batch_words=1200, hierarchical=True)
+    res = summarize_multiple_files(processed_file_ids, output_format=out_format, batch_words=1200, hierarchical=True)
 
     # Export per-file summaries
     for per in res["per_file"]:
@@ -42,19 +43,29 @@ def run(files):
             pass
         name = (file_meta and file_meta.get("original_name")) or f"file_{fid}"
         safe_name = Path(name).stem
-        md_path = write_markdown(per["summary"], EXPORT_DIR, f"{safe_name}_summary_{int(time.time())}")
-        pdf_path = try_make_pdf_from_markdown(md_path)
-        print(f"Exported per-file summary for {name}:")
-        print("  MD:", md_path)
-        print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
+        if out_format == 'markdown':
+            md_path = write_markdown(per["summary"], EXPORT_DIR, f"{safe_name}_summary_{int(time.time())}")
+            pdf_path = try_make_pdf_from_markdown(md_path)
+            print(f"Exported per-file summary for {name}:")
+            print("  MD:", md_path)
+            print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
+        elif out_format == 'latex':
+            try_make_pdf_from_latex(per["summary"], EXPORT_DIR, f'{safe_name}_summary_{int(time.time())}')
+        else:
+            print('NOTHING GENERATED')
 
     # Export combined
-    combined = res["combined"]["summary"]
-    md_path = write_markdown(combined, EXPORT_DIR, f"combined_summary_{int(time.time())}")
-    pdf_path = try_make_pdf_from_markdown(md_path)
-    print("Exported combined summary:")
-    print("  MD:", md_path)
-    print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
+    if out_format == 'markdown':
+        combined = res["combined"]["summary"]
+        md_path = write_markdown(combined, EXPORT_DIR, f"combined_summary_{int(time.time())}")
+        pdf_path = try_make_pdf_from_markdown(md_path)
+        print("Exported combined summary:")
+        print("  MD:", md_path)
+        print("  PDF:", pdf_path if pdf_path else "(PDF not created)")
+    elif out_format == 'latex':
+        try_make_pdf_from_latex(per["summary"], EXPORT_DIR, f'{safe_name}_summary_{int(time.time())}')
+    else:
+        print('NO COMBINED SUMMARY GENERATED')
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
