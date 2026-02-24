@@ -71,8 +71,9 @@ def summarize_text(
             "- Use sections\n"
             "- Use itemize\n"
             "- Include provenance comments\n"
-            "- Output only LaTeX code"
-            "- Do not include Mardown code, or code of any other format"
+            "- Output only LaTeX code\n"
+            "- Do not include Mardown code, or code of any other format\n"
+            "- Use vocabulary that matches the level of the provided chuncks\n"
         )
 
     user_prompt = (

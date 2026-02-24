@@ -86,5 +86,5 @@ def clean_latex(lt_text: str) -> str:
             r"\usepackage{amsmath}" + "\n" + r'\usepackage{fontspec}'
         )
     if r'\end{document}' not in lt_text:
-        lt_text += r'\end{document}'
+        lt_text += '\n' + r'\end{document}'
     return lt_text.strip()
