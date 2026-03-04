@@ -10,17 +10,40 @@ export default function App() {
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [generatedNotes, setGeneratedNotes] = useState<string>('');
 
-  const handleFilesSelected = (files: File[]) => {
-    setUploadedFiles(files);
-    setAppState('processing');
-    
-    // Simulate AI processing
-    setTimeout(() => {
-      const mockNotes = generateMockNotes(files);
-      setGeneratedNotes(mockNotes);
+  const handleFilesSelected = async (files: File[]) => {
+  setUploadedFiles(files);
+  setAppState('processing');
+
+  try {
+    const fd = new FormData();
+    files.forEach((f) => fd.append('files', f)); // backend expects files[] named "files"
+    // optional: ask for latex or markdown
+    fd.append('output_format', 'markdown');
+
+    const resp = await fetch('http://localhost:8000/process', {
+      method: 'POST',
+      body: fd,
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error('Server returned error:', resp.status, txt);
+      setGeneratedNotes(`Error from server: ${resp.status} - ${txt}`);
       setAppState('result');
-    }, 3000);
-  };
+      return;
+    }
+
+    const data = await resp.json();
+    // prefer combined_summary if available
+    const combined = data.combined_summary || (data.per_file && data.per_file.length ? data.per_file.map((p:any) => p.summary).join('\n\n') : '');
+    setGeneratedNotes(combined || "[No summary returned]");
+    setAppState('result');
+  } catch (err) {
+    console.error('Failed to process files', err);
+    setGeneratedNotes(`Failed to contact server: ${String(err)}`);
+    setAppState('result');
+  }
+};
 
   const handleStartOver = () => {
     setAppState('upload');
