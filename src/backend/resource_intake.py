@@ -2,10 +2,12 @@ import os
 import logging
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 
 import fitz  # pymupdf
 from docx import Document as DocxDocument
 from pptx import Presentation
+from pptx.shapes.group import GroupShape
 from PIL import Image
 import pytesseract
 
@@ -14,24 +16,54 @@ logging.basicConfig(level=logging.INFO)
 
 class ResourceIntake:
     @staticmethod
-    def simple_chunker(text: str, max_words: int = 200, overlap: int = 40) -> List[str]:
-        words = text.split()
-        if len(words) <= max_words:
-            return [text]
-        chunks = []
-        start = 0
-        while start < len(words):
-            end = min(start + max_words, len(words))
-            chunks.append(" ".join(words[start:end]))
-            if end == len(words):
-                break
-            start = end - overlap
+    def _sentence_split(text: str) -> List[str]:
+        if not text:
+            return []
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        if len(sentences) == 0:
+            return [text.strip()]
+        return [s.strip() for s in sentences if s.strip()]
+
+    @staticmethod
+    def chunk_text(text: str, max_words: int = 200, overlap_sentences: int = 0) -> List[str]:
+        if not text:
+            return []
+        sentences = ResourceIntake._sentence_split(text)
+        chunks: List[str] = []
+        cur_sentences: List[str] = []
+        cur_words = 0
+
+        for sent in sentences:
+            w = len(sent.split())
+            if cur_words + w <= max_words or not cur_sentences:
+                cur_sentences.append(sent)
+                cur_words += w
+            else:
+                chunks.append(" ".join(cur_sentences).strip())
+                if overlap_sentences and overlap_sentences < len(cur_sentences):
+                    cur_sentences = cur_sentences[-overlap_sentences:].copy()
+                else:
+                    cur_sentences = []
+                cur_words = sum(len(s.split()) for s in cur_sentences)
+                cur_sentences.append(sent)
+                cur_words += w
+
+        if cur_sentences:
+            chunks.append(" ".join(cur_sentences).strip())
+
         return chunks
+
+    @staticmethod
+    def simple_chunker(text: str, max_words: int = 200, overlap: int = 40) -> List[str]:
+        words_per_sentence = 15
+        overlap_sentences = max(0, int(overlap / words_per_sentence))
+        return ResourceIntake.chunk_text(text, max_words=max_words, overlap_sentences=overlap_sentences)
 
     @staticmethod
     def extract_docx(path: str, chunk_words: int = 200, overlap: int = 40) -> List[Dict[str, Any]]:
         results = []
         doc = DocxDocument(path)
+        # paragraphs
         for i, para in enumerate(doc.paragraphs):
             text = para.text.strip()
             if not text:
@@ -41,16 +73,50 @@ class ResourceIntake:
                 meta = dict(base_meta)
                 meta.update({"chunk_idx": chunk_idx, "excerpt": sub[:200]})
                 results.append({"text": sub, "meta": meta})
+        # tables: include each cell as its own small chunk
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    text = cell.text.strip()
+                    if not text:
+                        continue
+                    base_meta = {"source": os.path.basename(path), "type": "docx_table", "table_idx": t_idx, "row_idx": r_idx, "cell_idx": c_idx}
+                    for chunk_idx, sub in enumerate(ResourceIntake.simple_chunker(text, chunk_words, overlap)):
+                        meta = dict(base_meta)
+                        meta.update({"chunk_idx": chunk_idx, "excerpt": sub[:200]})
+                        results.append({"text": sub, "meta": meta})
         return results
+
+    @staticmethod
+    def _shape_text(shape) -> str:
+        # safe text extraction for pptx shapes, including grouped shapes
+        try:
+            # preferred: has_text_frame
+            if hasattr(shape, "has_text_frame") and shape.has_text_frame:
+                txt = shape.text_frame.text or ""
+                return txt.strip()
+            # fallback: direct .text
+            if hasattr(shape, "text"):
+                return (shape.text or "").strip()
+            # group shapes
+            if isinstance(shape, GroupShape):
+                texts = []
+                for shp in shape.shapes:
+                    texts.append(ResourceIntake._shape_text(shp))
+                return "\n".join([t for t in texts if t])
+        except Exception:
+            logger.exception("Failed to read shape text")
+        return ""
 
     @staticmethod
     def extract_pptx(path: str, chunk_words: int = 200, overlap: int = 40) -> List[Dict[str, Any]]:
         results = []
         prs = Presentation(path)
         for slide_idx, slide in enumerate(prs.slides):
+            # shapes text
             for shape_idx, shape in enumerate(slide.shapes):
-                if hasattr(shape, "text"):
-                    text = shape.text.strip()
+                try:
+                    text = ResourceIntake._shape_text(shape)
                     if not text:
                         continue
                     base_meta = {
@@ -63,15 +129,24 @@ class ResourceIntake:
                         meta = dict(base_meta)
                         meta.update({"chunk_idx": chunk_idx, "excerpt": sub[:200]})
                         results.append({"text": sub, "meta": meta})
+                except Exception:
+                    logger.exception("Failed to extract shape %s on slide %s", shape_idx, slide_idx)
+            # notes
             try:
-                if slide.has_notes_slide:
-                    notes = slide.notes_slide.notes_text_frame.text.strip()
-                    if notes:
-                        base_meta = {"source": os.path.basename(path), "type": "pptx", "slide_idx": slide_idx, "notes": True}
-                        for chunk_idx, sub in enumerate(ResourceIntake.simple_chunker(notes, chunk_words, overlap)):
-                            meta = dict(base_meta)
-                            meta.update({"chunk_idx": chunk_idx, "excerpt": sub[:200]})
-                            results.append({"text": sub, "meta": meta})
+                if hasattr(slide, "has_notes_slide") and slide.has_notes_slide:
+                    notes_tf = None
+                    try:
+                        notes_tf = slide.notes_slide.notes_text_frame
+                    except Exception:
+                        notes_tf = None
+                    if notes_tf:
+                        notes = notes_tf.text.strip()
+                        if notes:
+                            base_meta = {"source": os.path.basename(path), "type": "pptx", "slide_idx": slide_idx, "notes": True}
+                            for chunk_idx, sub in enumerate(ResourceIntake.simple_chunker(notes, chunk_words, overlap)):
+                                meta = dict(base_meta)
+                                meta.update({"chunk_idx": chunk_idx, "excerpt": sub[:200]})
+                                results.append({"text": sub, "meta": meta})
             except Exception:
                 logger.exception("Failed to read notes for slide %s in %s", slide_idx, path)
         return results
@@ -120,3 +195,4 @@ class ResourceIntake:
             return ResourceIntake.extract_pdf(path, **kwargs)
         logger.warning("Unsupported file type: %s", ext)
         return []
+    
