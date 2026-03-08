@@ -16,7 +16,14 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
+  server: {
+      proxy: {
+        '/process': {
+          target: 'http://localhost:8000',
+          changeOrigin: true,
+        },
+      }
+    },
+  // File types to support raw imports.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })

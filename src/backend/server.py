@@ -7,7 +7,6 @@ import os
 import tempfile
 import logging
 
-# import your pipeline functions (adjust import path if needed)
 from processing import process_file_bytes
 from connector import summarize_multiple_files
 
@@ -16,10 +15,13 @@ logger.setLevel(logging.INFO)
 
 app = FastAPI(title="Study-Buddy Backend")
 
-# allow your frontend dev origin (or use "*" for development)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # change if your frontend runs on different origin
+    allow_origins=[
+        "http://localhost:5173",   # Vite default
+        "http://127.0.0.1:5173",   # some browsers use 127.0.0.1
+        "http://localhost:3000",   # keep if you sometimes use 3000
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,11 +30,9 @@ app.add_middleware(
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
 @app.get("/health")
 async def health():
     return {"status": "ok"}
-
 
 @app.post("/process")
 async def process_files(files: List[UploadFile] = File(...), output_format: str = Form("markdown")):
@@ -58,7 +58,7 @@ async def process_files(files: List[UploadFile] = File(...), output_format: str 
                 raise HTTPException(status_code=500, detail=f"Processing failed for {uploaded.filename}")
             file_ids.append(summary["file_id"])
 
-        # call your summarizer (uses connector.summarize_multiple_files)
+        # call summarizer (uses connector.summarize_multiple_files)
         combined = summarize_multiple_files(
             file_ids,
             output_format=output_format,

@@ -13,8 +13,15 @@
 - Place files for summarization into `uploads/` directory
 - In terminal: `python run_pipline.py`
 
-## For User Interface: 
+## User Interface: 
 - Install dependencies using 'npm i'
 - Run using 'npm run dev'
 - Click on ouput link to view User Interface
 - In terminal: `python local_processor.py /path/to/file`
+
+## Initial Final Branch: 
+- Install dependencies from requirements.txt and using `npm i`
+- In terminal: `cd src/backend`
+- Then: `python -m uvicorn server:app`
+- In another terminal instance: `npm run dev`
+ 
