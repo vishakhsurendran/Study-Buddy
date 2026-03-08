@@ -6,13 +6,37 @@ interface ResultViewProps {
   notes: string;
   fileCount: number;
   onStartOver: () => void;
+  pdfUrl?: string | null;
 }
 
-export function ResultView({ notes, fileCount, onStartOver }: ResultViewProps) {
+export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultViewProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleDownloadPDF = () => {
-    // Create a blob with the notes content
+  const handleDownloadPDF = async () => {
+    // If backend produced a PDF, fetch and download it
+    if (pdfUrl) {
+      try {
+        const resp = await fetch(pdfUrl, { method: 'GET' });
+        if (!resp.ok) {
+          throw new Error(`Failed to fetch PDF: ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `ai-notes-${new Date().toISOString().split('T')[0]}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        return;
+      } catch (err) {
+        console.error('PDF download failed, falling back to text download:', err);
+        // fall through to text fallback
+      }
+    }
+
+    // Fallback: create a text file and download
     const blob = new Blob([notes], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -58,8 +82,9 @@ export function ResultView({ notes, fileCount, onStartOver }: ResultViewProps) {
                 className="bg-white text-blue-600 hover:bg-blue-50"
               >
                 <Download className="w-4 h-4 mr-2" />
-                Download Notes
+                {pdfUrl ? 'Download PDF' : 'Download Notes'}
               </Button>
+
               <Button
                 onClick={handleCopy}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30"
@@ -67,6 +92,7 @@ export function ResultView({ notes, fileCount, onStartOver }: ResultViewProps) {
                 <Copy className="w-4 h-4 mr-2" />
                 {copied ? 'Copied!' : 'Copy to Clipboard'}
               </Button>
+
               <Button
                 onClick={onStartOver}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30 ml-auto"
@@ -75,6 +101,19 @@ export function ResultView({ notes, fileCount, onStartOver }: ResultViewProps) {
                 Process New Documents
               </Button>
             </div>
+
+            {pdfUrl && (
+              <div className="mt-3">
+                <a
+                  href={pdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-white/90 underline"
+                >
+                  Open compiled PDF in a new tab
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Notes Content */}

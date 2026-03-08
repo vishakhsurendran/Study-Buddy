@@ -9,46 +9,60 @@ export default function App() {
   const [appState, setAppState] = useState<AppState>('upload');
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [generatedNotes, setGeneratedNotes] = useState<string>('');
+  const [combinedPdfUrl, setCombinedPdfUrl] = useState<string | null>(null);
 
   const handleFilesSelected = async (files: File[]) => {
-  setUploadedFiles(files);
-  setAppState('processing');
+    setUploadedFiles(files);
+    setAppState('processing');
+    setCombinedPdfUrl(null);
+    setGeneratedNotes('');
 
-  try {
-    const fd = new FormData();
-    files.forEach((f) => fd.append('files', f)); // backend expects files[] named "files"
-    // optional: ask for latex or markdown
-    fd.append('output_format', 'markdown');
+    try {
+      const fd = new FormData();
+      files.forEach((f) => fd.append('files', f)); // backend expects files[] named "files"
+      // Request LaTeX so the backend attempts to compile to PDF
+      fd.append('output_format', 'latex');
 
-    const resp = await fetch('http://localhost:8000/process', {
-      method: 'POST',
-      body: fd,
-    });
+      const resp = await fetch('http://localhost:8000/process', {
+        method: 'POST',
+        body: fd,
+      });
 
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error('Server returned error:', resp.status, txt);
-      setGeneratedNotes(`Error from server: ${resp.status} - ${txt}`);
+      if (!resp.ok) {
+        const txt = await resp.text();
+        console.error('Server returned error:', resp.status, txt);
+        setGeneratedNotes(`Error from server: ${resp.status} - ${txt}`);
+        setAppState('result');
+        return;
+      }
+
+      const data = await resp.json();
+
+      // if backend provided a PDF URL, save it
+      if (data.combined_pdf_url) {
+        setCombinedPdfUrl(data.combined_pdf_url);
+      }
+
+      // prefer combined_summary if available for text preview
+      const combined =
+        data.combined_summary ||
+        (data.per_file && data.per_file.length
+          ? data.per_file.map((p: any) => p.summary).join('\n\n')
+          : '');
+      setGeneratedNotes(combined || '[No summary returned]');
       setAppState('result');
-      return;
+    } catch (err) {
+      console.error('Failed to process files', err);
+      setGeneratedNotes(`Failed to contact server: ${String(err)}`);
+      setAppState('result');
     }
-
-    const data = await resp.json();
-    // prefer combined_summary if available
-    const combined = data.combined_summary || (data.per_file && data.per_file.length ? data.per_file.map((p:any) => p.summary).join('\n\n') : '');
-    setGeneratedNotes(combined || "[No summary returned]");
-    setAppState('result');
-  } catch (err) {
-    console.error('Failed to process files', err);
-    setGeneratedNotes(`Failed to contact server: ${String(err)}`);
-    setAppState('result');
-  }
-};
+  };
 
   const handleStartOver = () => {
     setAppState('upload');
     setUploadedFiles([]);
     setGeneratedNotes('');
+    setCombinedPdfUrl(null);
   };
 
   const generateMockNotes = (files: File[]): string => {
@@ -114,16 +128,17 @@ This document contains comprehensive notes extracted and synthesized from your u
       {appState === 'upload' && (
         <FileUploader onFilesSelected={handleFilesSelected} />
       )}
-      
+
       {appState === 'processing' && (
         <ProcessingView fileCount={uploadedFiles.length} />
       )}
-      
+
       {appState === 'result' && (
-        <ResultView 
-          notes={generatedNotes} 
+        <ResultView
+          notes={generatedNotes}
           fileCount={uploadedFiles.length}
           onStartOver={handleStartOver}
+          pdfUrl={combinedPdfUrl}
         />
       )}
     </div>

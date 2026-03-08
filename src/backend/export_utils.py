@@ -1,90 +1,102 @@
+# export_utils.py
 import os
 from pathlib import Path
 import logging
 import subprocess
 import tempfile
+import time
 
 logger = logging.getLogger(__name__)
 
-def write_markdown(md_text: str, out_dir: str, filename_prefix: str) -> str:
+
+def write_latex(latex_text: str, out_dir: str, filename_prefix: str) -> str:
+    """
+    Writes latex_text to out_dir/filename_prefix.tex and returns path.
+    """
     os.makedirs(out_dir, exist_ok=True)
-    md_path = Path(out_dir) / f"{filename_prefix}.md"
-    md_path.write_text(md_text, encoding="utf-8")
-    return str(md_path)
+    tex_path = Path(out_dir) / f"{filename_prefix}.tex"
+    tex_path.write_text(latex_text, encoding="utf-8")
+    return str(tex_path)
 
-def try_make_pdf_from_markdown(md_path: str) -> str:
-    out_pdf = str(Path(md_path).with_suffix(".pdf"))
-    # Try pypandoc
-    try:
-        import pypandoc
-        logger.info("Converting with pypandoc")
-        pypandoc.convert_file(md_path, "pdf", outputfile=out_pdf)
-        return out_pdf
-    except Exception as e:
-        logger.info("pypandoc not available or failed: %s", e)
 
-    # Fallback: markdown -> html -> weasyprint
-    try:
-        import markdown
-        from weasyprint import HTML
-        logger.info("Converting with markdown + weasyprint")
-        html = markdown.markdown(Path(md_path).read_text(encoding="utf-8"), extensions=["fenced_code", "tables"])
-        HTML(string=html).write_pdf(out_pdf)
-        return out_pdf
-    except Exception as e:
-        logger.info("weasyprint fallback failed: %s", e)
+def _ensure_full_document(lt_text: str) -> str:
+    """
+    If the model output is a fragment (no \documentclass), wrap it with a minimal preamble.
+    If it already contains \documentclass, leave as-is but ensure \end{document} present.
+    """
+    t = lt_text.strip()
 
-    # If both fail, return empty string
-    return ""
+    # If it's a fenced code block, strip triple backticks
+    if t.startswith("```"):
+        # remove the first fence and optional language tag
+        lines = t.splitlines()
+        # drop leading fence
+        lines = lines[1:]
+        # drop trailing fence if present
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
 
-def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) -> None:
-    # first, clean up latex
-    lt_text = clean_latex(lt_text)
-    # then try and create pdf from latex
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tex_path = os.path.join(tmpdir, "doc.tex")
-
-        with open(tex_path, "w", encoding="utf-8") as f:
-            f.write(lt_text)
-
-        result = subprocess.run(
-            ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "doc.tex"],
-            cwd=tmpdir,
-            check=True
-        )
-
-        # print("STDOUT:\n", result.stdout)
-        # print("STDERR:\n", result.stderr)
-
-        if result.returncode != 0:
-            raise RuntimeError("LaTeX compilation failed")
-
-        pdf_path = os.path.join(tmpdir, "doc.pdf")
-        os.makedirs(out_dir, exist_ok=True)
-        final_pdf_path = Path(out_dir) / f"{filename_prefix}.pdf"
-        os.rename(pdf_path, final_pdf_path)
-
-def clean_latex(lt_text: str) -> str:
-    lt_text = lt_text.strip()
-    idx = lt_text.find("```")
-    if idx == -1:
-        pass
-    else:
-        lt_text = lt_text[idx:]
-    if lt_text.startswith("```"):
-        lt_text = lt_text.split("\n", 1)[1]
-    if lt_text.endswith("```"):
-        lt_text = lt_text.rsplit("\n", 1)[0]
-    if r"\usepackage{amssymb}" not in lt_text:
-        lt_text = lt_text.replace(
+    # Ensure we have \end{document}
+    if r"\documentclass" not in t:
+        pre = [
+            r"\documentclass[11pt]{article}",
             r"\usepackage{amsmath}",
-            r"\usepackage{amsmath}" + "\n" + r"\usepackage{amssymb}"
-        )
-    if r'\usepackage{fontspec}' not in lt_text:
-        lt_text = lt_text.replace(
-            r"\usepackage{amsmath}", 
-            r"\usepackage{amsmath}" + "\n" + r'\usepackage{fontspec}'
-        )
-    if r'\end{document}' not in lt_text:
-        lt_text += '\n' + r'\end{document}'
-    return lt_text.strip()
+            r"\usepackage{amssymb}",
+            r"\usepackage{geometry}",
+            r"\usepackage{fontspec}",  # works with xelatex/lualatex
+            r"\geometry{margin=1in}",
+            r"\setmainfont{Latin Modern Roman}",  # safe default on many TeX installs
+            r"\begin{document}",
+        ]
+        doc = "\n".join(pre) + "\n\n" + t
+        if r"\end{document}" not in doc:
+            doc += "\n\n\\end{document}\n"
+        return doc
+    else:
+        # has \documentclass — ensure end document
+        if r"\end{document}" not in t:
+            t = t + "\n\n\\end{document}\n"
+        return t
+
+
+def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) -> str:
+    """
+    Create a PDF from the LaTeX source `lt_text`.
+    Returns the absolute path to created PDF, or empty string on failure.
+    """
+    try:
+        full_doc = _ensure_full_document(lt_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tex_path = Path(tmpdir) / "doc.tex"
+            tex_path.write_text(full_doc, encoding="utf-8")
+
+            # Prefer xelatex (better unicode / fontspec support). Run twice for refs.
+            cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
+            logger.info("Running xelatex in %s", tmpdir)
+            try:
+                subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except subprocess.CalledProcessError as e:
+                logger.info("xelatex failed, attempting pdflatex fallback: %s", e)
+                # fallback to pdflatex without fontspec (still may fail on unicode)
+                cmd2 = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
+                subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            pdf_tmp = Path(tmpdir) / "doc.pdf"
+            if not pdf_tmp.exists():
+                logger.error("PDF not created at expected path %s", pdf_tmp)
+                return ""
+            os.makedirs(out_dir, exist_ok=True)
+            final_pdf = Path(out_dir) / f"{filename_prefix}.pdf"
+            # if file exists append timestamp to avoid clobbering
+            if final_pdf.exists():
+                final_pdf = Path(out_dir) / f"{filename_prefix}_{int(time.time())}.pdf"
+            pdf_tmp.replace(final_pdf)
+            return str(final_pdf)
+    except Exception as e:
+        logger.exception("LaTeX -> PDF conversion failed: %s", e)
+        return ""
+    
