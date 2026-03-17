@@ -24,4 +24,3 @@
 - In terminal: `cd src/backend`
 - Then: `python -m uvicorn server:app`
 - In another terminal instance: `npm run dev`
- 

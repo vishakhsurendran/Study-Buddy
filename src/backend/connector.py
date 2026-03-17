@@ -8,13 +8,13 @@ import math
 from file_storage import StorageManager
 from info_sum import summarize_text
 from export_utils import write_latex, try_make_pdf_from_latex
+from supabase_utils import upload_pdf_to_supabase
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Use the same base_dir as the rest of your app (make sure server mounts the same dir)
-storage = StorageManager(base_dir="data", reset_db_on_start=False)
-
+storage = StorageManager(files_bucket="files", exports_bucket="exports")
 
 def _make_provenance_chunk_text(chunks: List[Dict[str, Any]]) -> str:
     """
@@ -31,10 +31,10 @@ def _make_provenance_chunk_text(chunks: List[Dict[str, Any]]) -> str:
         if page:
             header += f" | page: {page}"
         if excerpt:
-            header += f" | excerpt: {excerpt[:120].replace('\\n',' ')}"
+            clean_excerpt = excerpt[:120].replace("\n", " ")
+            header += f" | excerpt: {clean_excerpt}"
         out_parts.append(f"{header}\nCONTENT:\n{ch.get('text','')}")
     return "\n\n".join(out_parts)
-
 
 def _batch_texts_by_words(texts: List[str], max_words_per_batch: int) -> List[List[str]]:
     """
@@ -159,18 +159,33 @@ def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex
 
     combined_result = {"summary_id": combined_summary_id, "summary": combined_final or ""}
 
-    # If latex output, attempt to write .tex and compile to pdf, return filename only (server serves folder)
+        # If latex output, attempt to write .tex and compile to pdf, then upload to Supabase
     if output_format.lower() == "latex" and combined_final and combined_final.strip():
-        exports_dir = Path(storage.base_dir) / "exports"
+        exports_dir = Path(storage.base_dir) / "exports" if hasattr(storage, "base_dir") else Path("data") / "exports"
         ts = int(time.time())
         safe_name = f"combined_summary_{ts}"
         try:
-            # write tex (for debug)
-            write_latex(combined_final, str(exports_dir), safe_name)
-            # compile
-            pdf_path = try_make_pdf_from_latex(combined_final, str(exports_dir), safe_name)
-            if pdf_path:
-                combined_result["pdf_path"] = Path(pdf_path).name
+            # Write the .tex locally (helpful for debugging)
+            tex_path = write_latex(combined_final, str(exports_dir), safe_name)
+
+            # compile locally (returns local PDF path on success or empty string)
+            local_pdf_path = try_make_pdf_from_latex(combined_final, str(exports_dir), safe_name)
+            if local_pdf_path:
+                # If your try_make_pdf already uploaded and returned a URL, detect it:
+                if local_pdf_path.startswith("http://") or local_pdf_path.startswith("https://"):
+                    combined_result["pdf_url"] = local_pdf_path
+                    combined_result["pdf_path"] = Path(local_pdf_path).name
+                else:
+                    # Otherwise upload the local PDF to Supabase via your supabase upload helper
+                    # upload_pdf_to_supabase should accept a local path and return a public URL (or "")
+                    upload_dest = f"combined/{Path(local_pdf_path).name}"
+                    public_url = upload_pdf_to_supabase(local_pdf_path, upload_dest)
+                    if public_url:
+                        combined_result["pdf_url"] = public_url
+                        combined_result["pdf_path"] = Path(local_pdf_path).name
+                    else:
+                        # fallback: expose the local path (so server can serve it if mounted)
+                        combined_result["pdf_path"] = Path(local_pdf_path).name
         except Exception as e:
             logger.exception("Failed to generate combined PDF: %s", e)
 

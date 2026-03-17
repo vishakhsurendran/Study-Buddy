@@ -10,8 +10,13 @@ from file_storage import StorageManager
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-storage = StorageManager(base_dir="data", reset_db_on_start=True)
+RESET_DB_ON_START = False
+storage = StorageManager()
 
+if RESET_DB_ON_START:
+    storage.supabase.table("chunks").delete().neq("id", 0).execute()
+    storage.supabase.table("summaries").delete().neq("id", 0).execute()
+    storage.supabase.table("files").delete().neq("id", 0).execute()
 
 def process_file_bytes(file_bytes: bytes, original_name: str, content_type: str = "") -> Dict[str, Any]:
     saved = storage.save_file_from_bytes(file_bytes, original_name, content_type)

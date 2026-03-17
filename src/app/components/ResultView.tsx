@@ -1,3 +1,4 @@
+// ResultView.tsx
 import { Download, RefreshCw, CheckCircle2, Copy } from 'lucide-react';
 import { Button } from './ui/button';
 import { useState } from 'react';
@@ -12,31 +13,14 @@ interface ResultViewProps {
 export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultViewProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleDownloadPDF = async () => {
-    // If backend produced a PDF, fetch and download it
+  const handleDownloadPDF = () => {
+    // If backend provided a PDF URL, open it in a new tab (most reliable)
     if (pdfUrl) {
-      try {
-        const resp = await fetch(pdfUrl, { method: 'GET' });
-        if (!resp.ok) {
-          throw new Error(`Failed to fetch PDF: ${resp.status}`);
-        }
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `ai-notes-${new Date().toISOString().split('T')[0]}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        return;
-      } catch (err) {
-        console.error('PDF download failed, falling back to text download:', err);
-        // fall through to text fallback
-      }
+      window.open(pdfUrl, "_blank");
+      return;
     }
 
-    // Fallback: create a text file and download
+    // Fallback: download plain text as .txt
     const blob = new Blob([notes], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -82,9 +66,8 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 className="bg-white text-blue-600 hover:bg-blue-50"
               >
                 <Download className="w-4 h-4 mr-2" />
-                {pdfUrl ? 'Download PDF' : 'Download Notes'}
+                {pdfUrl ? 'Open PDF' : 'Download Notes'}
               </Button>
-
               <Button
                 onClick={handleCopy}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30"
@@ -92,7 +75,6 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 <Copy className="w-4 h-4 mr-2" />
                 {copied ? 'Copied!' : 'Copy to Clipboard'}
               </Button>
-
               <Button
                 onClick={onStartOver}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30 ml-auto"
@@ -101,19 +83,6 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 Process New Documents
               </Button>
             </div>
-
-            {pdfUrl && (
-              <div className="mt-3">
-                <a
-                  href={pdfUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm text-white/90 underline"
-                >
-                  Open compiled PDF in a new tab
-                </a>
-              </div>
-            )}
           </div>
 
           {/* Notes Content */}

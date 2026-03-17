@@ -1,4 +1,6 @@
 /venv
+/.venv
+/src/backend/.venv
 .env
 __pycache__
 .DS_Store
@@ -6,3 +8,5 @@ node_modules
 /data
 /uploads
 /src/backend/data
+/src/backend/.env
+/src/backend/uploads

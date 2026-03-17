@@ -3,22 +3,27 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 from typing import List
+from pathlib import Path
 import uvicorn
 import os
 import logging
 
-# import your pipeline functions
 from processing import process_file_bytes
 from connector import summarize_multiple_files
+
+# Ensure exports directory exists and mount it at /exports
+BASE_DIR = Path(__file__).resolve().parent
+EXPORTS_DIR = BASE_DIR / "data" / "exports"
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(title="Study-Buddy Backend")
+app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 
 logger = logging.getLogger("backend")
 logger.setLevel(logging.INFO)
 
-app = FastAPI(title="Study-Buddy Backend")
-
-# CORS: ensure your frontend origin is allowed (vite default 5173)
+# allow your frontend origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
@@ -26,12 +31,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-BASE_DIR = Path(__file__).resolve().parent
-EXPORTS_DIR = BASE_DIR / "data" / "exports"
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
-app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 
 
 @app.get("/health")
@@ -41,10 +40,6 @@ async def health():
 
 @app.post("/process")
 async def process_files(request: Request, files: List[UploadFile] = File(...), output_format: str = Form("markdown")):
-    """
-    Accepts multiple files, runs pipeline, returns per-file summaries and combined summary.
-    If output_format == 'latex' and connector created a PDF, returns combined_pdf_url.
-    """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
@@ -77,14 +72,27 @@ async def process_files(request: Request, files: List[UploadFile] = File(...), o
             "combined_summary_format": output_format
         }
 
-        # if connector generated a pdf filename, add full URL
-        pdf_filename = combined.get("combined", {}).get("pdf_path")
-        if pdf_filename:
-            # request.base_url is like http://127.0.0.1:8000/
-            # build URL: <base>/exports/<pdf_filename>
-            base = str(request.base_url).rstrip("/")
-            result["combined_pdf_url"] = f"{base}/exports/{pdf_filename}"
+        # If connector provided a PDF URL, pass it straight to frontend
+        # Accept either 'pdf_url' (preferred, full URL) or 'pdf_path' (legacy filename or local path)
+        pdf_url = None
+        combined_info = combined.get("combined", {}) if isinstance(combined, dict) else {}
+        # connector should set combined_info["pdf_url"] to a full URL (Supabase)
+        if combined_info.get("pdf_url"):
+            pdf_url = combined_info.get("pdf_url")
+        elif combined_info.get("pdf_path"):
+            # If pdf_path is already a full URL (maybe upload helper returned it), use it.
+            candidate = combined_info.get("pdf_path")
+            if isinstance(candidate, str) and (candidate.startswith("http://") or candidate.startswith("https://")):
+                pdf_url = candidate
+            else:
+                # Legacy: if pdf_path is a filename on disk, build a static URL served by this FastAPI app.
+                # Only do this if you also mount exports and the file is written to EXPORTS_DIR (server serves /exports)
+                base = str(request.base_url).rstrip("/")
+                pdf_url = f"{base}/exports/{candidate}"
 
+        if pdf_url:
+            result["combined_pdf_url"] = pdf_url
+            
         return JSONResponse(result)
 
     except HTTPException:

@@ -1,167 +1,302 @@
+# file_storage.py (robust replacement for supabase clients)
 import os
-import sqlite3
-import json
+import logging
 import time
+import json
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from io import BytesIO
+
+from supabase_client import supabase 
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+def _extract_resp_data(resp: Any) -> Optional[Any]:
+    """
+    Try to extract .data / data field from various supabase client response shapes.
+    """
+    if resp is None:
+        return None
+    # dict-like response
+    if isinstance(resp, dict):
+        if "data" in resp:
+            return resp.get("data")
+        # sometimes payload under "body" or "json"
+        if "body" in resp:
+            return resp.get("body")
+        return resp
+    # pydantic / ApiResponse-like objects
+    if hasattr(resp, "data"):
+        try:
+            return getattr(resp, "data")
+        except Exception:
+            pass
+    # httpx.Response-like
+    if hasattr(resp, "json"):
+        try:
+            return resp.json()
+        except Exception:
+            pass
+    return None
+
+
+def _extract_resp_error(resp: Any) -> Optional[Any]:
+    """
+    Try to extract an 'error' value from a supabase response.
+    """
+    if resp is None:
+        return None
+    if isinstance(resp, dict):
+        if "error" in resp:
+            return resp.get("error")
+        if "errors" in resp:
+            return resp.get("errors")
+    if hasattr(resp, "error"):
+        try:
+            return getattr(resp, "error")
+        except Exception:
+            pass
+    # try attributes common to APIResponse-like shapes
+    for attr in ("errors", "status_code", "message"):
+        if hasattr(resp, attr):
+            try:
+                v = getattr(resp, attr)
+                if v:
+                    return v
+            except Exception:
+                pass
+    return None
+
 
 class StorageManager:
-    def __init__(self, base_dir: str = "data", reset_db_on_start: bool = True):
-        self.base_dir = Path(base_dir)
-        self.files_dir = self.base_dir / "files" 
-        self.db_path = self.base_dir / "storage.db"
+    """
+    Supabase-backed storage manager wrapper. Expects:
+      - supabase: a supabase client created in supabase_client.py
+      - tables: files, chunks, summaries in Postgres (via Supabase)
+      - storage buckets: 'files' and 'exports' (or configured names)
+    """
 
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.files_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, files_bucket: str = "files", exports_bucket: str = "exports"):
+        self.files_bucket = files_bucket
+        self.exports_bucket = exports_bucket
+        self.supabase = supabase
 
-        if reset_db_on_start and self.db_path.exists():
-            try:
-                self.db_path.unlink()
-            except Exception:
-                pass
-
-        self._ensure_db()
-
-    def _conn(self):
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _ensure_db(self):
-        conn = self._conn()
-        c = conn.cursor()
-
-        # files table: 
-        c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY,
-                original_name TEXT,
-                stored_name TEXT,
-                content_type TEXT,
-                size INTEGER,
-                uploaded_at REAL
-            )
-            """
-        )
-
-        # chunks table with page column (nullable)
-        c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chunks (
-                id INTEGER PRIMARY KEY,
-                file_id INTEGER,
-                chunk_idx INTEGER,
-                text TEXT,
-                meta_json TEXT,
-                page INTEGER,
-                FOREIGN KEY(file_id) REFERENCES files(id)
-            )
-            """
-        )
-
-        # summaries table
-        c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS summaries (
-                id INTEGER PRIMARY KEY,
-                file_id INTEGER,
-                summary_text TEXT,
-                created_at REAL,
-                FOREIGN KEY(file_id) REFERENCES files(id)
-            )
-            """
-        )
-
-        conn.commit()
-
-        c.execute("PRAGMA table_info(chunks)")
-        cols = [r["name"] for r in c.fetchall()]
-        if "page" not in cols:
-            try:
-                c.execute("ALTER TABLE chunks ADD COLUMN page INTEGER")
-                conn.commit()
-            except Exception:
-                pass
-
-        conn.close()
-
+    # ---------- files ----------
     def save_file_from_bytes(self, file_bytes: bytes, original_name: str, content_type: str = "") -> Dict[str, Any]:
-        size = len(file_bytes)
-        conn = self._conn()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO files (original_name, stored_name, content_type, size, uploaded_at) VALUES (?, ?, ?, ?, ?)",
-            (original_name, None, content_type, size, time.time()),
-        )
-        file_id = c.lastrowid
-        conn.commit()
-        conn.close()
+        """
+        Insert a metadata row into 'files', upload object to storage 'files' bucket,
+        update stored_name column, and return file_id and stored path.
+        """
+        try:
+            meta = {
+                "original_name": original_name,
+                "stored_name": None,
+                "content_type": content_type,
+                "size": len(file_bytes),
+                # Use ISO 8601 string (timestamptz friendly)
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            }
 
-        return {"file_id": file_id, "stored_path": None, "original_name": original_name, "size": size}
+            logger.info("Inserting file metadata into Supabase files table")
+            resp = self.supabase.table("files").insert(meta).execute()
 
+            # debug logging for visibility (helpful when clients differ)
+            logger.debug("Supabase insert response: %r", resp)
+
+            error = _extract_resp_error(resp)
+            data = _extract_resp_data(resp)
+
+            if error:
+                logger.error("Supabase returned error on insert: %s", error)
+                raise RuntimeError(f"DB insert failed: {error}")
+
+            # data should be list of inserted rows
+            inserted_row = None
+            if isinstance(data, list) and len(data) > 0:
+                inserted_row = data[0]
+            elif isinstance(data, dict) and "id" in data:
+                inserted_row = data
+            else:
+                # some clients return a wrapper { 'data': [ ... ] } or APIResponse with .data
+                if isinstance(resp, dict) and "data" in resp and isinstance(resp["data"], list) and resp["data"]:
+                    inserted_row = resp["data"][0]
+
+            if not inserted_row:
+                logger.error("Could not determine inserted row from response: %r", resp)
+                raise RuntimeError("DB insert did not return row data")
+
+            file_id = int(inserted_row.get("id"))
+            key = f"files/{file_id}_{original_name}"
+
+            # Try upload; supabase client versions accept different arg shapes.
+            logger.info("Uploading file bytes to Supabase storage '%s' as key '%s'", self.files_bucket, key)
+            try:
+                bucket = self.supabase.storage.from_(self.files_bucket)
+                # first attempt: bytes upload (some clients accept bytes)
+                try:
+                    upload_resp = bucket.upload(key, file_bytes)
+                except TypeError:
+                    # fallback: pass file-like
+                    upload_resp = bucket.upload(key, BytesIO(file_bytes))
+                logger.debug("Supabase storage upload response: %r", upload_resp)
+            except Exception as e:
+                logger.exception("Supabase storage upload threw exception: %s", e)
+                upload_resp = None
+
+            # Update stored_name if upload apparently succeeded (we don't strictly require upload_resp.error shape)
+            try:
+                self.supabase.table("files").update({"stored_name": key}).eq("id", file_id).execute()
+            except Exception:
+                logger.exception("Failed to update stored_name for file %s in DB", file_id)
+
+            return {"file_id": file_id, "stored_path": key, "original_name": original_name, "size": len(file_bytes)}
+        except Exception as e:
+            logger.exception("save_file_from_bytes failed: %s", e)
+            raise
+
+    # ---------- chunks ----------
     def save_chunks(self, file_id: int, chunks: List[Dict[str, Any]]):
-        conn = self._conn()
-        c = conn.cursor()
-        for ch in chunks:
-            text = ch["text"]
-            meta = ch.get("meta", {}) or {}
-            meta_json = json.dumps(meta, ensure_ascii=False)
-            chunk_idx = meta.get("chunk_idx", 0)
-            page = meta.get("page")
-            c.execute(
-                "INSERT INTO chunks (file_id, chunk_idx, text, meta_json, page) VALUES (?, ?, ?, ?, ?)",
-                (file_id, chunk_idx, text, meta_json, page),
-            )
-        conn.commit()
-        conn.close()
+        """
+        Batch-insert chunk rows into 'chunks' table.
+        Each chunk row is: file_id, chunk_idx, text, meta_json, page
+        """
+        try:
+            rows = []
+            for ch in chunks:
+                meta = ch.get("meta", {}) or {}
+                rows.append({
+                    "file_id": int(file_id),
+                    "chunk_idx": meta.get("chunk_idx", 0),
+                    "text": ch.get("text", ""),
+                    "meta_json": meta,
+                    "page": meta.get("page")
+                })
+            if rows:
+                resp = self.supabase.table("chunks").insert(rows).execute()
+                logger.debug("Supabase chunks insert resp: %r", resp)
+                err = _extract_resp_error(resp)
+                if err:
+                    logger.error("Error inserting chunks: %s", err)
+        except Exception as e:
+            logger.exception("save_chunks failed: %s", e)
+            raise
 
+    # ---------- query helpers ----------
     def get_file_by_id(self, file_id: int) -> Optional[Dict[str, Any]]:
-        conn = self._conn()
-        c = conn.cursor()
-        c.execute("SELECT * FROM files WHERE id = ?", (file_id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return None
-        return dict(row)
+        try:
+            resp = self.supabase.table("files").select("*").eq("id", file_id).execute()
+            logger.debug("get_file_by_id resp: %r", resp)
+            data = _extract_resp_data(resp)
+            if isinstance(data, list) and data:
+                return data[0]
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as e:
+            logger.exception("get_file_by_id error: %s", e)
+        return None
 
     def query_chunks_by_file(self, file_id: int) -> List[Dict[str, Any]]:
-        conn = self._conn()
-        c = conn.cursor()
-        c.execute(
-            "SELECT chunk_idx, text, meta_json, page FROM chunks WHERE file_id = ? ORDER BY chunk_idx",
-            (file_id,),
-        )
-        rows = c.fetchall()
-        conn.close()
-        result = []
-        for r in rows:
-            meta = json.loads(r["meta_json"]) if r["meta_json"] else {}
-            if r["page"] is not None:
-                meta["page"] = r["page"]
-            result.append({"chunk_idx": r["chunk_idx"], "text": r["text"], "meta": meta})
-        return result
+        try:
+            # many supabase client versions accept just a column name in order()
+            resp = (
+                self.supabase
+                .table("chunks")
+                .select("chunk_idx, text, meta_json, page")
+                .eq("file_id", int(file_id))
+                .order("chunk_idx")
+                .execute()
+            )
+            data = _extract_resp_data(resp) or []
+            rows: List[Dict[str, Any]] = []
+            if isinstance(data, list):
+                for r in data:
+                    meta = r.get("meta_json") or {}
+                    if r.get("page") is not None:
+                        meta["page"] = r.get("page")
+                    rows.append({"chunk_idx": r.get("chunk_idx"), "text": r.get("text"), "meta": meta})
+            return rows
+        except Exception as e:
+            logger.exception("query_chunks_by_file error: %s", e)
+            return []
 
-    def save_summary(self, file_id: int, summary_text: str) -> int:
-        conn = self._conn()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO summaries (file_id, summary_text, created_at) VALUES (?, ?, ?)",
-            (file_id, summary_text, time.time()),
-        )
-        summary_id = c.lastrowid
-        conn.commit()
-        conn.close()
-        return summary_id
+    def save_summary(self, file_id: Optional[int], summary_text: str) -> int:
+        try:
+            record = {
+                "file_id": int(file_id) if file_id is not None else None,
+                "summary_text": summary_text,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            resp = self.supabase.table("summaries").insert(record).execute()
+            logger.debug("save_summary resp: %r", resp)
+            data = _extract_resp_data(resp)
+            if isinstance(data, list) and data:
+                return int(data[0].get("id"))
+            if isinstance(data, dict) and data.get("id"):
+                return int(data.get("id"))
+        except Exception as e:
+            logger.exception("save_summary insert error: %s", e)
+        return -1
 
     def get_summary_by_id(self, summary_id: int) -> Optional[Dict[str, Any]]:
-        conn = self._conn()
-        c = conn.cursor()
-        c.execute("SELECT * FROM summaries WHERE id = ?", (summary_id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
+        try:
+            resp = self.supabase.table("summaries").select("*").eq("id", int(summary_id)).execute()
+            data = _extract_resp_data(resp)
+            if isinstance(data, list) and data:
+                return data[0]
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as e:
+            logger.exception("get_summary_by_id error: %s", e)
+        return None
+
+    # ---------- exports ----------
+    def upload_export_file(self, local_path: str, dest_filename: str) -> Optional[str]:
+        """
+        Upload local file to exports bucket and return public URL (or signed URL fallback).
+        Returns None on failure.
+        """
+        try:
+            key = f"exports/{dest_filename}"
+            bucket = self.supabase.storage.from_(self.exports_bucket)
+            logger.info("Uploading export file %s -> bucket key %s", local_path, key)
+            with open(local_path, "rb") as fh:
+                data = fh.read()
+            try:
+                # try bytes upload first
+                upload_resp = bucket.upload(key, data)
+            except TypeError:
+                # fallback for clients that want file-like
+                upload_resp = bucket.upload(key, BytesIO(data))
+            logger.debug("upload_export_file resp: %r", upload_resp)
+            # Now attempt to get a public URL (client versions vary)
+            try:
+                public = bucket.get_public_url(key)
+                logger.debug("get_public_url resp: %r", public)
+                if isinstance(public, dict):
+                    url = public.get("publicUrl") or public.get("public_url") or public.get("publicURL")
+                    if url:
+                        return url
+                # some clients return object with attribute public_url
+                if hasattr(public, "publicUrl"):
+                    return getattr(public, "publicUrl")
+                if hasattr(public, "public_url"):
+                    return getattr(public, "public_url")
+            except Exception:
+                logger.exception("get_public_url failed")
+
+            # fallback: create signed url
+            try:
+                signed = bucket.create_signed_url(key, 60 * 60)
+                logger.debug("create_signed_url resp: %r", signed)
+                if isinstance(signed, dict):
+                    return signed.get("signedURL") or signed.get("signed_url") or None
+            except Exception:
+                logger.exception("create_signed_url failed")
             return None
-        return dict(row)
-    
+        except Exception as e:
+            logger.exception("upload_export_file failed: %s", e)
+            return None
+        
