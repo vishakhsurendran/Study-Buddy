@@ -194,7 +194,7 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
             final_pdf = Path(out_dir) / f"{filename_prefix}.pdf"
             if final_pdf.exists():
                 final_pdf = Path(out_dir) / f"{filename_prefix}_{int(time.time())}.pdf"
-            pdf_tmp.replace(final_pdf)
+            shutil.move(str(pdf_tmp), str(final_pdf))
             return str(final_pdf)
     except Exception as e:
         logger.exception("LaTeX -> PDF conversion failed: %s", e)
