@@ -67,18 +67,41 @@ def summarize_text(
         )
     else:
         system_prompt = (
-            "You are an expert academic assistant producing concise LaTeX notes.\n"
-            "- Use sections\n"
-            "- Use itemize\n"
-            "- Include provenance comments\n"
-            "- Output only LaTeX code\n"
-            "- Do not include Mardown code, or code of any other format\n"
-            "- Use vocabulary that matches the level of the provided chuncks\n"
+            """You are an AI assistant that converts educational text into clean, structured LaTeX lecture notes.
+Output **only valid LaTeX code**. Do NOT include \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
+Do NOT include explanations or commentary outside of LaTeX.
+
+Rules:
+1. Organize content using \\section, \\subsection, \\subsubsection as appropriate.
+2. Use \\begin{itemize}...\\end{itemize} or \\begin{enumerate}...\\end{enumerate} for lists.
+3. Format all equations in LaTeX math mode. Ensure all mathematical symbols are valid in LaTeX and wrap all math in $...$ or \[...\] as appropriate. If there is no math, skip math formatting.
+4. For definitions, examples, theorems, and propositions, use the standard amsthm environments **only if appropriate**:
+   - \\begin{definition} ... \\end{definition}
+   - \\begin{theorem} ... \\end{theorem}
+   - \\begin{proposition} ... \\end{proposition}
+   - \\begin{example} ... \\end{example}
+5. Replace any non-standard environments (e.g., exercise, solution, remark) with standard LaTeX structures:
+   - Use \\subsection*{Exercise} for exercises
+   - Use \\subsection*{Solution} for solutions
+   - Use \\subsection*{Remark} for remarks
+6. Keep LaTeX syntax correct; do not invent commands. Use only standard LaTeX and amsmath/amsfonts/amscls commands.
+7. Break content into logical sections and subsections based on the input text."""
         )
 
     user_prompt = (
-        "Summarize the following chunks:\n\n"
-        + text
+        f'''
+        Here is the text from my course material:
+
+{text}
+
+Convert this text into structured LaTeX lecture notes:
+- Organize topics using sections and subsections.
+- Use itemize or enumerate for lists.
+- Format all definitions, theorems, examples, and equations properly in LaTeX.
+- Do NOT include the LaTeX preamble (\\documentclass, \\usepackage) or \\begin{{document}}/\\end{{document}}.
+- For non-math content, focus on clear structure and lists; skip math formatting if not present.
+- Use \\subsection* for exercises, solutions, and remarks instead of any custom environments.
+'''
     )
 
     try:
