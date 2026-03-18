@@ -79,6 +79,7 @@ def _ensure_full_document(lt_text: str) -> str:
         "remark",
         "claim",
         "example",
+        "exercise"
     ]
 
     found_envs = set(re.findall(r'\\begin\{([a-zA-Z*]+)\}', t))
