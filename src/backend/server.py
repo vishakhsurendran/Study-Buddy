@@ -13,6 +13,24 @@ import logging
 from processing import process_file_bytes
 from connector import summarize_multiple_files
 
+# ---- logging middleware ----
+logger = logging.getLogger("backend")
+logger.setLevel(logging.INFO)
+
+app = FastAPI(title="Study-Buddy Backend")
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info("Incoming request: %s %s from %s", request.method, request.url.path, request.client.host if request.client else "unknown")
+    resp = await call_next(request)
+    logger.info("Response status: %s for %s %s", resp.status_code, request.method, request.url.path)
+    return resp
+
+# Debug route: list routes (useful on deployed instance)
+@app.get("/_debug/routes")
+async def list_routes():
+    return {"routes": [r.path for r in app.routes]}
+
 # Ensure exports directory exists and mount it at /exports
 BASE_DIR = Path(__file__).resolve().parent
 EXPORTS_DIR = BASE_DIR / "data" / "exports"
@@ -21,9 +39,6 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Study-Buddy Backend")
 app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 
-logger = logging.getLogger("backend")
-logger.setLevel(logging.INFO)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -31,6 +46,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "https://*.vercel.app",
+        "https://study-buddy-git-productioninitial-vishakh-surendrans-projects.vercel.app/"
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,

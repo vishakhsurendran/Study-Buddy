@@ -27,7 +27,7 @@ export default function App() {
 
       // Use configured API_URL (works on localhost in dev, and points to Render in prod)
       const resp = await fetch(`${API_URL}/process`, {
-        method: "POST",
+        method: 'POST',
         body: fd,
       });
 
