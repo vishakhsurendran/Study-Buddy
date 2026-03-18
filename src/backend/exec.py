@@ -11,6 +11,7 @@ logger.setLevel(logging.INFO)
 
 EXPORT_DIR = "data/exports"
 
+# returns 0 on failure, 1 on success
 def run(files):
     processed_file_ids = []
     out_format = 'latex'
@@ -26,7 +27,7 @@ def run(files):
 
     if not processed_file_ids:
         print("No files processed. Exiting.")
-        return
+        return 0
 
     out_name = ''
     tries = 0
@@ -35,7 +36,7 @@ def run(files):
         if tries > max_tries:
             print(f'too many tries, max tries: {max_tries - 1}')
             print('nothing generated')
-            return
+            return 0
         tries += 1
         # Summarize all processed files and produce a combined summary
         res = summarize_multiple_files(processed_file_ids, output_format=out_format, batch_words=1200, hierarchical=True)
@@ -85,6 +86,8 @@ def run(files):
         # out_name = try_make_pdf_from_latex(per["summary"], EXPORT_DIR, f'{safe_name}_summary_{int(time.time())}')
     else:
         print('NO COMBINED SUMMARY GENERATED')
+
+    return 1
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
