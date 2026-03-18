@@ -4,17 +4,16 @@ import re
 import subprocess
 import tempfile
 import time
-import logging
-import shutil
-from pathlib import Path
-
-from supabase_client import supabase
-from file_storage import StorageManager
+import re
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-storage = StorageManager()  # uses default buckets
+def write_markdown(md_text: str, out_dir: str, filename_prefix: str) -> str:
+    os.makedirs(out_dir, exist_ok=True)
+    md_path = Path(out_dir) / f"{filename_prefix}.md"
+    md_path.write_text(md_text, encoding="utf-8")
+    return str(md_path)
 
 def write_latex(latex_text: str, out_dir: str, filename_prefix: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
@@ -46,14 +45,15 @@ def _escape_percent_underscore_outside_math(text: str) -> str:
 
 def _ensure_full_document(lt_text: str) -> str:
     """
-    Ensure the LaTeX text is a full document, inject commonly-needed packages and
-    theorem/env definitions if the generated tex uses them. Also lightly sanitize.
-    Returns modified LaTeX source.
+    If the model output is a fragment (no \\documentclass), wrap it with a minimal preamble.
+    If it already contains \\documentclass, leave as-is but ensure \\end{document} present.
     """
     t = lt_text or ""
     t = t.strip()
 
-    # Remove triple-backtick fences from LLM output if present
+    t = re.sub(r'\\chapter(\s*\{)', r'\\section\1', t)
+
+    # If it's a fenced code block, strip triple backticks
     if t.startswith("```"):
         lines = t.splitlines()
         if len(lines) >= 2:
@@ -62,40 +62,12 @@ def _ensure_full_document(lt_text: str) -> str:
                 lines = lines[:-1]
         t = "\n".join(lines).strip()
 
-    # Lightly escape problem characters outside math
-    t = _escape_percent_underscore_outside_math(t)
-
-    # --- SANITIZE known-bad / uncommon packages that may not be installed ---
-    # Remove the problematic 'thmstyle' package (observed from logs), and any exact matches
-    t_before = t
-    t = re.sub(r'\\usepackage(\[[^\]]*\])?\{thmstyle\}', r'% removed unsupported package: thmstyle', t, flags=re.IGNORECASE)
-
-    # If the LLM inserted other nonstandard package lines that might break compilation,
-    # we leave them alone except for a small whitelist approach can be added later if needed.
-    if t != t_before:
-        logger.info("Sanitized nonstandard package directives from LaTeX source (e.g., thmstyle).")
-
-    # Detect if the document already has a \documentclass
-    has_docclass = r"\documentclass" in t
-
-    # Detect theorem-like environments used by the document
-    theorem_envs = ["theorem", "lemma", "proposition", "corollary", "definition", "remark", "claim", "example"]
-    begins = re.findall(r'\\begin\{([a-zA-Z*]+)\}', t)
-    found_envs = set(e for e in begins if e in theorem_envs)
-
-    # Helper: check whether a \newtheorem for env exists already in text
-    def has_newtheorem(env_name: str, text: str) -> bool:
-        pat = re.compile(r'\\newtheorem\s*\{\s*' + re.escape(env_name) + r'\s*\}', re.IGNORECASE)
-        return bool(pat.search(text))
-
-    missing_newtheorems = []
-    for env in sorted(found_envs):
-        if not has_newtheorem(env, t):
-            display = env.capitalize()
-            missing_newtheorems.append(r"\newtheorem{" + env + r"}{" + display + r"}")
-
-    # If no \documentclass, create a minimal wrapper and include packages + newtheorems
-    if not has_docclass:
+    # remove \document class if it already exists
+    t = re.sub(r'\\documentclass(\[[^\]]*\])?\{[^}]*\}\s*', '', t)
+    t = re.sub(r'\\begin\{document\}', '', t)
+    t = re.sub(r'\\usepackage(\[[^\]]*\])?\{[^}]*\}\s*', '', t)
+    # Ensure we have \end{document}
+    if r"\documentclass" not in t:
         pre = [
             r"\documentclass[11pt]{article}",
             r"\usepackage{amsmath}",
@@ -104,9 +76,25 @@ def _ensure_full_document(lt_text: str) -> str:
             r"\usepackage{amsthm}",
             r"\usepackage{enumitem}",
             r"\usepackage{geometry}",
-            r"\usepackage{fontspec}",
+            r"\usepackage{amsfonts}",
+            r"\usepackage{fontspec}",  # works with xelatex/lualatex
+            r"\usepackage{amsthm}",
+            r"\newtheorem{theorem}{Theorem}",
+            r"\newtheorem{definition}{Definition}",
+            r"\newtheorem{proposition}{Proposition}",
+            r"\newtheorem{lemma}{Lemma}",
+            r"\newtheorem{example}{Example}",
             r"\geometry{margin=1in}",
-            r"\setmainfont{Latin Modern Roman}",
+            r"\usepackage{iftex}",
+            r"\ifXeTeX",
+            r"    \usepackage{fontspec}",
+            r"    \setmainfont{Latin Modern Roman}",
+            r"\else",
+            r"    \usepackage[T1]{fontenc}",
+            r"    \usepackage{lmodern}",
+            r"\fi",
+            r"\setmainfont{Latin Modern Roman}",  # safe default on many TeX installs
+            r"\begin{document}",
         ]
         # If any theorem-like envs are present, append their \newtheorem definitions
         if missing_newtheorems:
@@ -159,6 +147,7 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
     """
     try:
         full_doc = _ensure_full_document(lt_text)
+        # print(full_doc)
 
         # Save the .tex to the out_dir for persistent debugging (useful in container mount)
         os.makedirs(out_dir, exist_ok=True)
@@ -175,33 +164,25 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
 
             try:
                 subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except subprocess.CalledProcessError as e:
-                # capture output and log it for debugging
-                stdout = e.stdout.decode("utf-8", errors="replace") if e.stdout else ""
-                stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-                logger.info("xelatex failed: stdout:\n%s\nstderr:\n%s", stdout[:4000], stderr[:4000])
-                # fallback to pdflatex
+                # logger.info("xelatex failed, attempting pdflatex fallback: %s", e)
+                # logger.info("xelatex failed, attempting pdflatex fallback")
+                logger.info("xelatex failed")
+                print("STDOUT:\n", e.stdout)
+                print("STDERR:\n", e.stderr)
+                return ''
+                # fallback to pdflatex without fontspec (still may fail on unicode)
                 cmd2 = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
                 try:
                     subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except subprocess.CalledProcessError as e2:
-                    stdout2 = e2.stdout.decode("utf-8", errors="replace") if e2.stdout else ""
-                    stderr2 = e2.stderr.decode("utf-8", errors="replace") if e2.stderr else ""
-                    logger.error("pdflatex also failed: stdout:\n%s\nstderr:\n%s", stdout2[:4000], stderr2[:4000])
-                    # copy the generated doc.tex to out_dir for manual inspection
-                    try:
-                        shutil.copy(tex_path, debug_tex_path)
-                        # optionally copy the full tmpdir to out_dir/<prefix>-debug for deeper inspection
-                        debug_folder = Path(out_dir) / f"{filename_prefix}-latex-debug"
-                        if debug_folder.exists():
-                            shutil.rmtree(debug_folder)
-                        shutil.copytree(tmpdir, str(debug_folder))
-                        logger.info("Saved latex debug folder to %s", debug_folder)
-                    except Exception:
-                        logger.exception("Failed to save latex debug artifacts")
-                    return ""
+                    # subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                except subprocess.CalledProcessError as e:
+                    logger.info("pdflatex failed")
+                    print("STDOUT:\n", e.stdout)
+                    print("STDERR:\n", e.stderr)
+                    return ''
+                
 
             pdf_tmp = Path(tmpdir) / "doc.pdf"
             if not pdf_tmp.exists():
