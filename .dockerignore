@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+
+# Python virtualenvs and caches
+__pycache__
+*.pyc
+.venv
+venv
+
+# OS
+.DS_Store
+
+# IDE/editor
+.vscode
+.idea
+
+# Logs
+*.log
+
+# Local runtime directories that shouldn't be sent to Docker context
+src/backend/uploads
+src/backend/data/exports
+
+# Frontend builds
+dist
+build
+.next

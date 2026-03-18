@@ -24,4 +24,9 @@
 - In terminal: `cd src/backend`
 - Then: `python -m uvicorn server:app`
 - In another terminal instance: `npm run dev`
- 
+
+## Production Initial Branch:
+- Install dependencies from requirements.txt and using `npm i`
+- In terminal: `docker compose up --build`
+- In another terminal instance: `npm run dev`
+- Production Link: `To Be Added`

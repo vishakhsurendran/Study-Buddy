@@ -1,4 +1,5 @@
-import { Download, RefreshCw, CheckCircle2, Copy } from 'lucide-react';
+// ResultView.tsx
+import { Download, RefreshCw, CheckCircle2, Copy, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import { useState } from 'react';
 
@@ -7,36 +8,26 @@ interface ResultViewProps {
   fileCount: number;
   onStartOver: () => void;
   pdfUrl?: string | null;
+  pdfError?: string | null;
 }
 
-export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultViewProps) {
+export function ResultView({ notes, fileCount, onStartOver, pdfUrl, pdfError }: ResultViewProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleDownloadPDF = async () => {
-    // If backend produced a PDF, fetch and download it
+  const handleDownloadPDF = () => {
+    // If backend provided a PDF URL, open it in a new tab (most reliable)
     if (pdfUrl) {
-      try {
-        const resp = await fetch(pdfUrl, { method: 'GET' });
-        if (!resp.ok) {
-          throw new Error(`Failed to fetch PDF: ${resp.status}`);
-        }
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `ai-notes-${new Date().toISOString().split('T')[0]}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        return;
-      } catch (err) {
-        console.error('PDF download failed, falling back to text download:', err);
-        // fall through to text fallback
-      }
+      window.open(pdfUrl, "_blank");
+      return;
     }
 
-    // Fallback: create a text file and download
+    // If there's a PDF error, let the user know (but still allow text download)
+    if (pdfError) {
+      // Optionally we could prompt a confirm, but keep UX simple: show text fallback download
+      console.warn("PDF generation/upload error:", pdfError);
+    }
+
+    // Fallback: download plain text as .txt
     const blob = new Blob([notes], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -82,9 +73,8 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 className="bg-white text-blue-600 hover:bg-blue-50"
               >
                 <Download className="w-4 h-4 mr-2" />
-                {pdfUrl ? 'Download PDF' : 'Download Notes'}
+                {pdfUrl ? 'Open PDF' : 'Download Notes'}
               </Button>
-
               <Button
                 onClick={handleCopy}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30"
@@ -92,7 +82,6 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 <Copy className="w-4 h-4 mr-2" />
                 {copied ? 'Copied!' : 'Copy to Clipboard'}
               </Button>
-
               <Button
                 onClick={onStartOver}
                 className="bg-white/10 text-white hover:bg-white/20 border border-white/30 ml-auto"
@@ -101,20 +90,21 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl }: ResultView
                 Process New Documents
               </Button>
             </div>
-
-            {pdfUrl && (
-              <div className="mt-3">
-                <a
-                  href={pdfUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm text-white/90 underline"
-                >
-                  Open compiled PDF in a new tab
-                </a>
-              </div>
-            )}
           </div>
+
+          {/* PDF error banner (if any) */}
+          {pdfError && (
+            <div className="p-4 bg-yellow-50 border-t border-yellow-200 text-yellow-800 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 mt-0.5" />
+              <div>
+                <div className="font-semibold">PDF generation/upload issue</div>
+                <div className="text-sm mt-1">{pdfError}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  The server returned a problem while creating or uploading the PDF. You may still download the notes as a text file above, or check the server logs for details.
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Notes Content */}
           <div className="p-8">

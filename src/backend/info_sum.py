@@ -25,9 +25,7 @@ DEFAULT_MODEL = os.getenv(
 
 DEFAULT_PROVIDER = os.getenv("HF_PROVIDER", None)
 
-
 def _make_client():
-
     if not HF_TOKEN:
         raise RuntimeError(
             "HF_TOKEN not set. Please set HF_TOKEN in your environment or .env"
