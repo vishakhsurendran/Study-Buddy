@@ -3,24 +3,21 @@ import logging
 from typing import List, Dict, Any, Tuple
 import time
 from pathlib import Path
-import math
 
 from file_storage import StorageManager
 from info_sum import summarize_text
 from export_utils import write_latex, try_make_pdf_from_latex
+# keep supabase_utils for backwards compatibility / optional use
 from supabase_utils import upload_pdf_to_supabase
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Use the same base_dir as the rest of your app (make sure server mounts the same dir)
+# Use the same StorageManager that other modules import (ensures consistent buckets)
 storage = StorageManager(files_bucket="files", exports_bucket="exports")
 
+
 def _make_provenance_chunk_text(chunks: List[Dict[str, Any]]) -> str:
-    """
-    Turn a list of chunk dicts into a provenance-rich string for the LLM.
-    Each chunk dict is expected to have keys: text, meta (with page, source etc).
-    """
     out_parts = []
     for ch in chunks:
         meta = ch.get("meta", {}) or {}
@@ -36,11 +33,8 @@ def _make_provenance_chunk_text(chunks: List[Dict[str, Any]]) -> str:
         out_parts.append(f"{header}\nCONTENT:\n{ch.get('text','')}")
     return "\n\n".join(out_parts)
 
+
 def _batch_texts_by_words(texts: List[str], max_words_per_batch: int) -> List[List[str]]:
-    """
-    Batch a list of texts (strings) into batches of approx max_words_per_batch.
-    Returns list of batches, each batch is a list of texts joined later.
-    """
     batches = []
     cur = []
     cur_words = 0
@@ -60,38 +54,28 @@ def _batch_texts_by_words(texts: List[str], max_words_per_batch: int) -> List[Li
 
 def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: str = "latex",
                          batch_words: int = 1200, hierarchical_final: bool = True, target_words: int = 800) -> Tuple[str, Dict[str, Any]]:
-    """
-    Accepts a list of provenance-rich strings (one per file or per chunk-group).
-    If the input is large, summarize in batches then optionally do a hierarchical final merge.
-    Returns (final_summary_text, debug_info)
-    """
-    # flatten input texts to list of strings
     texts = [t for t in chunks_provenance_texts if t and t.strip()]
     if not texts:
         return "", {"steps": []}
 
-    # Split into batches by words
     batches = _batch_texts_by_words(texts, batch_words)
     batch_summaries = []
     debug = {"batches": len(batches), "batch_sizes": [len(b) for b in batches], "steps": []}
 
     for i, b in enumerate(batches):
         joined = "\n\n".join(b)
-        # ask model to summarize this batch
         summ = summarize_text(joined, output_format=output_format, max_tokens=2000, temperature=0.2)
         batch_summaries.append(summ)
-        debug["steps"].append({"batch": i, "words_in_batch": sum(len(x.split()) for x in b), "summary_words": len(summ.split())})
+        debug["steps"].append({
+            "batch": i,
+            "words_in_batch": sum(len(x.split()) for x in b),
+            "summary_words": len(summ.split())
+        })
 
-    # If only one batch, return it (already final)
     if len(batch_summaries) == 1 or not hierarchical_final:
-        final = batch_summaries[0]
-        return final, debug
+        return batch_summaries[0], debug
 
-    # Otherwise, combine batch summaries into a final pass
-    combined_for_final = []
-    for i, s in enumerate(batch_summaries):
-        # add light provenance for the batch
-        combined_for_final.append(f"--- BATCH {i+1} SUMMARY ---\n{ s }")
+    combined_for_final = [f"--- BATCH {i+1} SUMMARY ---\n{ s }" for i, s in enumerate(batch_summaries)]
     combined_text = "\n\n".join(combined_for_final)
 
     final_summary = summarize_text(combined_text, output_format=output_format, max_tokens=3000, temperature=0.1)
@@ -100,19 +84,12 @@ def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: s
 
 
 def summarize_file(file_id: int, *, output_format: str = "latex", batch_words: int = 1200, hierarchical: bool = True, target_ratio: float = 0.12) -> Dict[str, Any]:
-    """
-    Summarize chunks for a single file_id.
-    Returns dict: {file_id, summary, summary_id (if saved)}.
-    """
     chunks = storage.query_chunks_by_file(file_id)
     if not chunks:
         return {"file_id": file_id, "summary": ""}
 
-    # Build provenance-rich small strings for each chunk (or group by page)
-    # Here we group by page if page metadata exists, else keep chunk-level
     grouped = []
     if chunks and "meta" in chunks[0] and chunks[0]["meta"].get("page") is not None:
-        # group by page
         by_page = {}
         for ch in chunks:
             p = ch["meta"].get("page", 0)
@@ -120,25 +97,18 @@ def summarize_file(file_id: int, *, output_format: str = "latex", batch_words: i
         for p in sorted(by_page.keys()):
             grouped.append(_make_provenance_chunk_text(by_page[p]))
     else:
-        # keep chunk-level items
         for ch in chunks:
             grouped.append(_make_provenance_chunk_text([ch]))
 
-    # Now summarize grouped text (use summarize_large_text so it batches if needed)
     estimated_target_words = max(200, int(sum(len(x.split()) for x in grouped) * target_ratio))
     final, debug = summarize_large_text(grouped, output_format=output_format, batch_words=batch_words, hierarchical_final=hierarchical, target_words=estimated_target_words)
 
-    # Save summary to DB (optional)
     summary_id = storage.save_summary(file_id, final) if final else None
 
     return {"file_id": file_id, "summary": final or "", "summary_id": summary_id, "debug": debug}
 
 
 def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex", batch_words: int = 1200, hierarchical: bool = True, target_ratio: float = 0.12) -> Dict[str, Any]:
-    """
-    Summarize many files and produce a combined summary. If latex requested, attempt to create a combined PDF.
-    Returns {"per_file": [...], "combined": {"summary": "...", "summary_id":..., "pdf_path": "<filename>"?}}
-    """
     per_file_results = []
     combined_text_parts = []
 
@@ -153,39 +123,65 @@ def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex
         else:
             combined_text_parts.append(f"=== DOCUMENT: {name} ===\n\n[NO SUMMARY GENERATED]")
 
-    # Combined summarization pass (could be latex or markdown)
-    combined_final, debug_combined = summarize_large_text(combined_text_parts, output_format=output_format, batch_words=batch_words, hierarchical_final=hierarchical, target_words=int(sum(max(150, int(len(p.split()) * target_ratio)) for p in combined_text_parts)))
-    combined_summary_id = storage.save_summary(None if not file_ids else file_ids[0], combined_final) if combined_final else None
+    combined_final, debug_combined = summarize_large_text(
+        combined_text_parts,
+        output_format=output_format,
+        batch_words=batch_words,
+        hierarchical_final=hierarchical,
+        target_words=int(sum(max(150, int(len(p.split()) * target_ratio)) for p in combined_text_parts))
+    )
 
+    combined_summary_id = storage.save_summary(None if not file_ids else file_ids[0], combined_final) if combined_final else None
     combined_result = {"summary_id": combined_summary_id, "summary": combined_final or ""}
 
-        # If latex output, attempt to write .tex and compile to pdf, then upload to Supabase
+    # If latex output, try to write .tex, compile to PDF, and upload to Supabase (exports)
     if output_format.lower() == "latex" and combined_final and combined_final.strip():
-        exports_dir = Path(storage.base_dir) / "exports" if hasattr(storage, "base_dir") else Path("data") / "exports"
+        # use the container-local exports folder (matches server mount / exports static)
+        exports_dir = Path("data") / "exports"
         ts = int(time.time())
         safe_name = f"combined_summary_{ts}"
         try:
             # Write the .tex locally (helpful for debugging)
             tex_path = write_latex(combined_final, str(exports_dir), safe_name)
+            logger.info("Wrote .tex to %s", tex_path)
 
             # compile locally (returns local PDF path on success or empty string)
             local_pdf_path = try_make_pdf_from_latex(combined_final, str(exports_dir), safe_name)
             if local_pdf_path:
-                # If your try_make_pdf already uploaded and returned a URL, detect it:
-                if local_pdf_path.startswith("http://") or local_pdf_path.startswith("https://"):
+                logger.info("Local PDF created at %s", local_pdf_path)
+
+                # If try_make_pdf_from_latex returned an absolute http(s) URL (some helper variants might),
+                # treat it as a direct public URL.
+                if isinstance(local_pdf_path, str) and (local_pdf_path.startswith("http://") or local_pdf_path.startswith("https://")):
                     combined_result["pdf_url"] = local_pdf_path
                     combined_result["pdf_path"] = Path(local_pdf_path).name
+                    logger.info("PDF compilation returned a URL directly: %s", local_pdf_path)
                 else:
-                    # Otherwise upload the local PDF to Supabase via your supabase upload helper
-                    # upload_pdf_to_supabase should accept a local path and return a public URL (or "")
-                    upload_dest = f"combined/{Path(local_pdf_path).name}"
-                    public_url = upload_pdf_to_supabase(local_pdf_path, upload_dest)
-                    if public_url:
-                        combined_result["pdf_url"] = public_url
-                        combined_result["pdf_path"] = Path(local_pdf_path).name
+                    # Upload the local PDF to Supabase exports bucket via StorageManager helper
+                    local_pdf_path = str(local_pdf_path)
+                    dest_filename = Path(local_pdf_path).name
+                    upload_url = None
+                    try:
+                        # Use the StorageManager uploader which handles client differences
+                        upload_url = storage.upload_export_file(local_pdf_path, dest_filename)
+                    except Exception as e:
+                        logger.exception("storage.upload_export_file threw: %s", e)
+
+                    # fallback to supabase_utils if StorageManager didn't return a url
+                    if not upload_url:
+                        try:
+                            upload_url = upload_pdf_to_supabase(local_pdf_path, f"combined/{dest_filename}")
+                        except Exception:
+                            logger.exception("upload_pdf_to_supabase fallback failed")
+
+                    if upload_url:
+                        combined_result["pdf_url"] = upload_url
+                        combined_result["pdf_path"] = dest_filename
+                        logger.info("Uploaded compiled PDF and got public URL: %s", upload_url)
                     else:
-                        # fallback: expose the local path (so server can serve it if mounted)
-                        combined_result["pdf_path"] = Path(local_pdf_path).name
+                        # If upload failed, keep local filename so server can serve it from /exports if mounted
+                        combined_result["pdf_path"] = dest_filename
+                        logger.warning("PDF compiled but upload failed; exposing local filename %s (ensure /exports is mounted)", dest_filename)
         except Exception as e:
             logger.exception("Failed to generate combined PDF: %s", e)
 

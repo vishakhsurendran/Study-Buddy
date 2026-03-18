@@ -93,9 +93,11 @@ def _ensure_full_document(lt_text: str) -> str:
         doc = "\n".join(pre) + "\n\n" + t
         if r"\end{document}" not in doc:
             doc += "\n\n\\end{document}\n"
-        # ensure a basic theorem environment exists if text mentions theorem
-        if re.search(r'\\begin\{theorem\}', doc) and r'\newtheorem{theorem}' not in doc:
-            doc = doc.replace(r"\begin{document}", r"\newtheorem{theorem}{Theorem}" + "\n\n" + r"\begin{document}")
+        if re.search(r'\\begin\{theorem\}', doc):
+            if r'\usepackage{amsthm}' not in doc:
+                doc = doc.replace(r"\begin{document}", r"\usepackage{amsthm}" + "\n" + r"\begin{document}")
+            if r'\newtheorem{theorem}' not in doc:
+                doc = doc.replace(r"\begin{document}", r"\newtheorem{theorem}{Theorem}" + "\n" + r"\begin{document}")
         return doc
 
     # If the doc already has \documentclass: attempt to inject missing packages/defs

@@ -10,7 +10,7 @@ from file_storage import StorageManager
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-RESET_DB_ON_START = False
+RESET_DB_ON_START = True
 storage = StorageManager()
 
 if RESET_DB_ON_START:

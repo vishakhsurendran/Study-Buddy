@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from typing import List
 from pathlib import Path
+from file_storage import StorageManager
 import uvicorn
 import os
 import logging
@@ -23,15 +24,19 @@ app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 logger = logging.getLogger("backend")
 logger.setLevel(logging.INFO)
 
-# allow your frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "https://*.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.get("/health")
 async def health():
@@ -101,6 +106,13 @@ async def process_files(request: Request, files: List[UploadFile] = File(...), o
         logger.exception("Unexpected error in /process: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.post("/reset")
+def reset_db():
+    storage = StorageManager()
+    storage.supabase.table("chunks").delete().neq("id", 0).execute()
+    storage.supabase.table("summaries").delete().neq("id", 0).execute()
+    storage.supabase.table("files").delete().neq("id", 0).execute()
+    return {"ok": True}
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

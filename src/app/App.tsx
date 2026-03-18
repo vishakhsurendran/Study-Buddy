@@ -1,38 +1,41 @@
-import { useState } from 'react';
-import { FileUploader } from './components/FileUploader';
-import { ProcessingView } from './components/ProcessingView';
-import { ResultView } from './components/ResultView';
+// src/App.tsx
+import { useState } from "react";
+import { FileUploader } from "./components/FileUploader";
+import { ProcessingView } from "./components/ProcessingView";
+import { ResultView } from "./components/ResultView";
 
-type AppState = 'upload' | 'processing' | 'result';
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
+type AppState = "upload" | "processing" | "result";
 
 export default function App() {
-  const [appState, setAppState] = useState<AppState>('upload');
+  const [appState, setAppState] = useState<AppState>("upload");
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-  const [generatedNotes, setGeneratedNotes] = useState<string>('');
+  const [generatedNotes, setGeneratedNotes] = useState<string>("");
   const [combinedPdfUrl, setCombinedPdfUrl] = useState<string | null>(null);
 
   const handleFilesSelected = async (files: File[]) => {
     setUploadedFiles(files);
-    setAppState('processing');
+    setAppState("processing");
     setCombinedPdfUrl(null);
-    setGeneratedNotes('');
+    setGeneratedNotes("");
 
     try {
       const fd = new FormData();
-      files.forEach((f) => fd.append('files', f)); // backend expects files[] named "files"
-      // Request LaTeX so the backend attempts to compile to PDF
-      fd.append('output_format', 'latex');
+      files.forEach((f) => fd.append("files", f)); // backend expects 'files'
+      fd.append("output_format", "latex");
 
-      const resp = await fetch('http://localhost:8000/process', {
-        method: 'POST',
+      // Use configured API_URL (works on localhost in dev, and points to Render in prod)
+      const resp = await fetch(`${API_URL}/process`, {
+        method: "POST",
         body: fd,
       });
 
       if (!resp.ok) {
         const txt = await resp.text();
-        console.error('Server returned error:', resp.status, txt);
+        console.error("Server returned error:", resp.status, txt);
         setGeneratedNotes(`Error from server: ${resp.status} - ${txt}`);
-        setAppState('result');
+        setAppState("result");
         return;
       }
 
@@ -41,27 +44,32 @@ export default function App() {
       // if backend provided a PDF URL, save it
       if (data.combined_pdf_url) {
         setCombinedPdfUrl(data.combined_pdf_url);
+      } else {
+        setCombinedPdfUrl(null);
+        if (!data.combined_summary || data.combined_summary.trim() === "") {
+          setGeneratedNotes("[No summary returned and no PDF could be produced; check server logs]");
+        }
       }
 
       // prefer combined_summary if available for text preview
       const combined =
         data.combined_summary ||
         (data.per_file && data.per_file.length
-          ? data.per_file.map((p: any) => p.summary).join('\n\n')
-          : '');
-      setGeneratedNotes(combined || '[No summary returned]');
-      setAppState('result');
+          ? data.per_file.map((p: any) => p.summary).join("\n\n")
+          : "");
+      setGeneratedNotes(combined || "[No summary returned]");
+      setAppState("result");
     } catch (err) {
-      console.error('Failed to process files', err);
+      console.error("Failed to process files", err);
       setGeneratedNotes(`Failed to contact server: ${String(err)}`);
-      setAppState('result');
+      setAppState("result");
     }
   };
 
   const handleStartOver = () => {
-    setAppState('upload');
+    setAppState("upload");
     setUploadedFiles([]);
-    setGeneratedNotes('');
+    setGeneratedNotes("");
     setCombinedPdfUrl(null);
   };
 
@@ -69,7 +77,7 @@ export default function App() {
     return `# AI-Generated Study Notes
 
 ## Documents Processed
-${files.map(file => `- ${file.name}`).join('\n')}
+${files.map((file) => `- ${file.name}`).join("\n")}
 
 ---
 
@@ -125,15 +133,11 @@ This document contains comprehensive notes extracted and synthesized from your u
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {appState === 'upload' && (
-        <FileUploader onFilesSelected={handleFilesSelected} />
-      )}
+      {appState === "upload" && <FileUploader onFilesSelected={handleFilesSelected} />}
 
-      {appState === 'processing' && (
-        <ProcessingView fileCount={uploadedFiles.length} />
-      )}
+      {appState === "processing" && <ProcessingView fileCount={uploadedFiles.length} />}
 
-      {appState === 'result' && (
+      {appState === "result" && (
         <ResultView
           notes={generatedNotes}
           fileCount={uploadedFiles.length}

@@ -1,4 +1,4 @@
-# file_storage.py (robust replacement for supabase clients)
+# file_storage.py
 import os
 import logging
 import time
@@ -8,33 +8,26 @@ from typing import Any, Dict, List, Optional
 from pathlib import Path
 from io import BytesIO
 
-from supabase_client import supabase 
+from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
 def _extract_resp_data(resp: Any) -> Optional[Any]:
-    """
-    Try to extract .data / data field from various supabase client response shapes.
-    """
     if resp is None:
         return None
-    # dict-like response
     if isinstance(resp, dict):
         if "data" in resp:
             return resp.get("data")
-        # sometimes payload under "body" or "json"
         if "body" in resp:
             return resp.get("body")
         return resp
-    # pydantic / ApiResponse-like objects
     if hasattr(resp, "data"):
         try:
             return getattr(resp, "data")
         except Exception:
             pass
-    # httpx.Response-like
     if hasattr(resp, "json"):
         try:
             return resp.json()
@@ -44,9 +37,6 @@ def _extract_resp_data(resp: Any) -> Optional[Any]:
 
 
 def _extract_resp_error(resp: Any) -> Optional[Any]:
-    """
-    Try to extract an 'error' value from a supabase response.
-    """
     if resp is None:
         return None
     if isinstance(resp, dict):
@@ -59,7 +49,6 @@ def _extract_resp_error(resp: Any) -> Optional[Any]:
             return getattr(resp, "error")
         except Exception:
             pass
-    # try attributes common to APIResponse-like shapes
     for attr in ("errors", "status_code", "message"):
         if hasattr(resp, attr):
             try:
@@ -86,24 +75,18 @@ class StorageManager:
 
     # ---------- files ----------
     def save_file_from_bytes(self, file_bytes: bytes, original_name: str, content_type: str = "") -> Dict[str, Any]:
-        """
-        Insert a metadata row into 'files', upload object to storage 'files' bucket,
-        update stored_name column, and return file_id and stored path.
-        """
         try:
             meta = {
                 "original_name": original_name,
                 "stored_name": None,
                 "content_type": content_type,
                 "size": len(file_bytes),
-                # Use ISO 8601 string (timestamptz friendly)
                 "uploaded_at": datetime.now(timezone.utc).isoformat(),
             }
 
             logger.info("Inserting file metadata into Supabase files table")
             resp = self.supabase.table("files").insert(meta).execute()
 
-            # debug logging for visibility (helpful when clients differ)
             logger.debug("Supabase insert response: %r", resp)
 
             error = _extract_resp_error(resp)
@@ -113,14 +96,12 @@ class StorageManager:
                 logger.error("Supabase returned error on insert: %s", error)
                 raise RuntimeError(f"DB insert failed: {error}")
 
-            # data should be list of inserted rows
             inserted_row = None
             if isinstance(data, list) and len(data) > 0:
                 inserted_row = data[0]
             elif isinstance(data, dict) and "id" in data:
                 inserted_row = data
             else:
-                # some clients return a wrapper { 'data': [ ... ] } or APIResponse with .data
                 if isinstance(resp, dict) and "data" in resp and isinstance(resp["data"], list) and resp["data"]:
                     inserted_row = resp["data"][0]
 
@@ -129,40 +110,42 @@ class StorageManager:
                 raise RuntimeError("DB insert did not return row data")
 
             file_id = int(inserted_row.get("id"))
-            key = f"files/{file_id}_{original_name}"
+            key = f"{file_id}_{original_name}"
 
             # Try upload; supabase client versions accept different arg shapes.
             logger.info("Uploading file bytes to Supabase storage '%s' as key '%s'", self.files_bucket, key)
             try:
                 bucket = self.supabase.storage.from_(self.files_bucket)
-                # first attempt: bytes upload (some clients accept bytes)
+                # try to set content-type if available (so stored object has correct MIME)
+                upload_resp = None
                 try:
-                    upload_resp = bucket.upload(key, file_bytes)
+                    upload_resp = bucket.upload(key, file_bytes, {"content-type": content_type or "application/octet-stream"})
                 except TypeError:
-                    # fallback: pass file-like
-                    upload_resp = bucket.upload(key, BytesIO(file_bytes))
+                    try:
+                        upload_resp = bucket.upload(key, file_bytes, content_type=content_type or "application/octet-stream")
+                    except TypeError:
+                        # fallback: file-like or raw bytes
+                        try:
+                            upload_resp = bucket.upload(key, BytesIO(file_bytes))
+                        except Exception:
+                            upload_resp = bucket.upload(key, file_bytes)
                 logger.debug("Supabase storage upload response: %r", upload_resp)
             except Exception as e:
                 logger.exception("Supabase storage upload threw exception: %s", e)
                 upload_resp = None
 
-            # Update stored_name if upload apparently succeeded (we don't strictly require upload_resp.error shape)
             try:
                 self.supabase.table("files").update({"stored_name": key}).eq("id", file_id).execute()
             except Exception:
                 logger.exception("Failed to update stored_name for file %s in DB", file_id)
 
-            return {"file_id": file_id, "stored_path": key, "original_name": original_name, "size": len(file_bytes)}
+            return {"file_id": file_id, "stored_path": f"{self.files_bucket}/{key}", "original_name": original_name, "size": len(file_bytes)}
         except Exception as e:
             logger.exception("save_file_from_bytes failed: %s", e)
             raise
 
     # ---------- chunks ----------
     def save_chunks(self, file_id: int, chunks: List[Dict[str, Any]]):
-        """
-        Batch-insert chunk rows into 'chunks' table.
-        Each chunk row is: file_id, chunk_idx, text, meta_json, page
-        """
         try:
             rows = []
             for ch in chunks:
@@ -200,7 +183,6 @@ class StorageManager:
 
     def query_chunks_by_file(self, file_id: int) -> List[Dict[str, Any]]:
         try:
-            # many supabase client versions accept just a column name in order()
             resp = (
                 self.supabase
                 .table("chunks")
@@ -256,6 +238,7 @@ class StorageManager:
     def upload_export_file(self, local_path: str, dest_filename: str) -> Optional[str]:
         """
         Upload local file to exports bucket and return public URL (or signed URL fallback).
+        Tries to set content-type to application/pdf so Supabase serves with correct MIME.
         Returns None on failure.
         """
         try:
@@ -264,14 +247,23 @@ class StorageManager:
             logger.info("Uploading export file %s -> bucket key %s", local_path, key)
             with open(local_path, "rb") as fh:
                 data = fh.read()
+
+            upload_resp = None
+            # Try several common signatures to set content-type depending on client version
             try:
-                # try bytes upload first
-                upload_resp = bucket.upload(key, data)
+                # some clients accept an options dict as the 3rd arg
+                upload_resp = bucket.upload(key, data, {"content-type": "application/pdf"})
             except TypeError:
-                # fallback for clients that want file-like
-                upload_resp = bucket.upload(key, BytesIO(data))
+                try:
+                    # some clients accept keyword arg content_type
+                    upload_resp = bucket.upload(key, data, content_type="application/pdf")
+                except TypeError:
+                    # some clients accept bytes only and infer type: fallback
+                    upload_resp = bucket.upload(key, data)
+
             logger.debug("upload_export_file resp: %r", upload_resp)
-            # Now attempt to get a public URL (client versions vary)
+
+            # Try to get a public URL; prefer object/public endpoint
             try:
                 public = bucket.get_public_url(key)
                 logger.debug("get_public_url resp: %r", public)
@@ -279,7 +271,6 @@ class StorageManager:
                     url = public.get("publicUrl") or public.get("public_url") or public.get("publicURL")
                     if url:
                         return url
-                # some clients return object with attribute public_url
                 if hasattr(public, "publicUrl"):
                     return getattr(public, "publicUrl")
                 if hasattr(public, "public_url"):
