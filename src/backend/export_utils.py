@@ -108,9 +108,11 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
                 # subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except subprocess.CalledProcessError as e:
                 # logger.info("xelatex failed, attempting pdflatex fallback: %s", e)
-                logger.info("xelatex failed, attempting pdflatex fallback")
+                # logger.info("xelatex failed, attempting pdflatex fallback")
+                logger.info("xelatex failed")
                 print("STDOUT:\n", e.stdout)
                 print("STDERR:\n", e.stderr)
+                return ''
                 # fallback to pdflatex without fontspec (still may fail on unicode)
                 cmd2 = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
                 try:
