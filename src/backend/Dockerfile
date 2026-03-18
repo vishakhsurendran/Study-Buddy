@@ -18,6 +18,8 @@ RUN apt-get update && \
       texlive-fonts-extra \
       texlive-lang-all \
       ghostscript \
+      texlive-plain-generic \
+      lmodern \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
