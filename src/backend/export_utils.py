@@ -1,10 +1,13 @@
 # export_utils.py (supabase upload aware)
+import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -97,9 +100,10 @@ def _ensure_full_document(lt_text: str) -> str:
             r"\begin{document}",
         ]
         # If any theorem-like envs are present, append their \newtheorem definitions
+        '''
         if missing_newtheorems:
             pre.extend(missing_newtheorems)
-
+        '''
         pre.append(r"\begin{document}")
         doc = "\n".join(pre) + "\n\n" + t
         if r"\end{document}" not in doc:
@@ -110,13 +114,14 @@ def _ensure_full_document(lt_text: str) -> str:
     needed_inserts = []
 
     # Ensure amsthm if theorem-like envs were detected and amsthm isn't present
+    '''
     if missing_newtheorems and "\\usepackage{amsthm}" not in t:
         needed_inserts.append(r"\usepackage{amsthm}")
     # Add any missing newtheorem definitions
     for nt in missing_newtheorems:
         if nt not in t:
             needed_inserts.append(nt)
-
+    '''
     # Ensure enumitem if itemize/enumerate used
     if "\\begin{itemize}" in t and "\\usepackage{enumitem}" not in t:
         needed_inserts.append(r"\usepackage{enumitem}")
