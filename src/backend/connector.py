@@ -16,7 +16,6 @@ logger.setLevel(logging.INFO)
 # Use the same StorageManager that other modules import (ensures consistent buckets)
 storage = StorageManager(files_bucket="files", exports_bucket="exports")
 
-
 def _make_provenance_chunk_text(chunks: List[Dict[str, Any]]) -> str:
     out_parts = []
     for ch in chunks:
@@ -134,6 +133,11 @@ def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex
     combined_summary_id = storage.save_summary(None if not file_ids else file_ids[0], combined_final) if combined_final else None
     combined_result = {"summary_id": combined_summary_id, "summary": combined_final or ""}
 
+    # provide default PDF fields / error
+    combined_result["pdf_url"] = None
+    combined_result["pdf_path"] = None
+    combined_result["pdf_error"] = None
+
     # If latex output, try to write .tex, compile to PDF, and upload to Supabase (exports)
     if output_format.lower() == "latex" and combined_final and combined_final.strip():
         # use the container-local exports folder (matches server mount / exports static)
@@ -179,10 +183,17 @@ def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex
                         combined_result["pdf_path"] = dest_filename
                         logger.info("Uploaded compiled PDF and got public URL: %s", upload_url)
                     else:
-                        # If upload failed, keep local filename so server can serve it from /exports if mounted
-                        combined_result["pdf_path"] = dest_filename
-                        logger.warning("PDF compiled but upload failed; exposing local filename %s (ensure /exports is mounted)", dest_filename)
+                        # upload failed: prefer to report an explicit error rather than silently letting UI guess
+                        combined_result["pdf_error"] = "PDF compiled locally but upload to storage failed"
+                        # keep local filename only if you know /exports is mounted and will be served; otherwise don't rely on it
+                        if Path(local_pdf_path).exists():
+                            combined_result["pdf_path"] = dest_filename
+                            logger.warning("PDF compiled but upload failed; saving local file %s (server may serve via /exports if mounted)", dest_filename)
+            else:
+                # try_make_pdf failed; try_make_pdf_from_latex already saved debug artifacts in exports_dir
+                combined_result["pdf_error"] = "LaTeX compilation failed; check debug folder in data/exports for details"
         except Exception as e:
             logger.exception("Failed to generate combined PDF: %s", e)
+            combined_result["pdf_error"] = f"Unexpected PDF generation error: {e}"
 
     return {"per_file": per_file_results, "combined": combined_result}

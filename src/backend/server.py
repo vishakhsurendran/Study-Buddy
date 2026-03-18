@@ -13,23 +13,10 @@ import logging
 from processing import process_file_bytes
 from connector import summarize_multiple_files
 
-# ---- logging middleware ----
+# ---- logging ----
 logger = logging.getLogger("backend")
 logger.setLevel(logging.INFO)
-
-app = FastAPI(title="Study-Buddy Backend")
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info("Incoming request: %s %s from %s", request.method, request.url.path, request.client.host if request.client else "unknown")
-    resp = await call_next(request)
-    logger.info("Response status: %s for %s %s", resp.status_code, request.method, request.url.path)
-    return resp
-
-# Debug route: list routes (useful on deployed instance)
-@app.get("/_debug/routes")
-async def list_routes():
-    return {"routes": [r.path for r in app.routes]}
+logging.getLogger("uvicorn").setLevel(logging.INFO)
 
 # Ensure exports directory exists and mount it at /exports
 BASE_DIR = Path(__file__).resolve().parent
@@ -39,20 +26,28 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Study-Buddy Backend")
 app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 
+# allow your frontend origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
-        "https://*.vercel.app",
-        "https://study-buddy-git-productioninitial-vishakh-surendrans-projects.vercel.app/"
+        # allow vercel previews / production via regex if needed
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    client_host = request.client.host if request.client else "unknown"
+    logger.info("Incoming request: %s %s from %s", request.method, request.url.path, client_host)
+    resp = await call_next(request)
+    logger.info("Response status: %s for %s %s", resp.status_code, request.method, request.url.path)
+    return resp
 
 @app.get("/health")
 async def health():
@@ -93,27 +88,37 @@ async def process_files(request: Request, files: List[UploadFile] = File(...), o
             "combined_summary_format": output_format
         }
 
-        # If connector provided a PDF URL, pass it straight to frontend
-        # Accept either 'pdf_url' (preferred, full URL) or 'pdf_path' (legacy filename or local path)
+        # If connector provided a PDF URL or an error, pass it to frontend
         pdf_url = None
+        pdf_error = None
         combined_info = combined.get("combined", {}) if isinstance(combined, dict) else {}
-        # connector should set combined_info["pdf_url"] to a full URL (Supabase)
+
         if combined_info.get("pdf_url"):
             pdf_url = combined_info.get("pdf_url")
         elif combined_info.get("pdf_path"):
-            # If pdf_path is already a full URL (maybe upload helper returned it), use it.
             candidate = combined_info.get("pdf_path")
+            # If pdf_path is already a full URL, use it
             if isinstance(candidate, str) and (candidate.startswith("http://") or candidate.startswith("https://")):
                 pdf_url = candidate
             else:
-                # Legacy: if pdf_path is a filename on disk, build a static URL served by this FastAPI app.
-                # Only do this if you also mount exports and the file is written to EXPORTS_DIR (server serves /exports)
-                base = str(request.base_url).rstrip("/")
-                pdf_url = f"{base}/exports/{candidate}"
+                # Only build a static /exports URL if the file actually exists in EXPORTS_DIR
+                candidate_name = Path(candidate).name
+                local_file = EXPORTS_DIR / candidate_name
+                if local_file.exists():
+                    base = str(request.base_url).rstrip("/")
+                    pdf_url = f"{base}/exports/{candidate_name}"
+                else:
+                    # do not fabricate a URL if local file missing; instead expose an error
+                    pdf_error = combined_info.get("pdf_error") or "Compiled PDF present locally on worker but not uploaded or not available for download."
+
+        if not pdf_url and combined_info.get("pdf_error"):
+            pdf_error = combined_info.get("pdf_error")
 
         if pdf_url:
             result["combined_pdf_url"] = pdf_url
-            
+        if pdf_error:
+            result["combined_pdf_error"] = pdf_error
+
         return JSONResponse(result)
 
     except HTTPException:
@@ -121,6 +126,7 @@ async def process_files(request: Request, files: List[UploadFile] = File(...), o
     except Exception as e:
         logger.exception("Unexpected error in /process: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
 
 @app.post("/reset")
 def reset_db():

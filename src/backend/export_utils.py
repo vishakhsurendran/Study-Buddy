@@ -25,25 +25,18 @@ def write_latex(latex_text: str, out_dir: str, filename_prefix: str) -> str:
 def _escape_percent_underscore_outside_math(text: str) -> str:
     """
     Naive escape: escapes '%' and '_' that are not already escaped and are outside inline ($...$)
-    or display (\[...\] or $$...$$) math. This is not perfect, but helps avoid many LLM-produced
-    stray characters that break compilation.
+    or display (\[...\] or $$...$$) math.
     """
-    # We'll split the document into math and non-math parts using a simple delimiter approach.
-    # Patterns: $...$, $$...$$, \[...\], \(...\) — naive, but good enough for most outputs.
     parts = []
     last = 0
-    # regex finds math starts and ends (keeps delimiters)
     math_pat = re.compile(r'(\$\$.*?\$\$|\$.*?\$|\\\[.*?\\\]|\\\(.*?\\\))', re.DOTALL)
     for m in math_pat.finditer(text):
-        # non-math part
         non_math = text[last:m.start()]
-        # escape unescaped % and _
         non_math = re.sub(r'(?<!\\)%','\\%', non_math)
         non_math = re.sub(r'(?<!\\)_','\\_', non_math)
         parts.append(non_math)
-        parts.append(m.group(0))  # math part unchanged
+        parts.append(m.group(0))
         last = m.end()
-    # tail
     tail = text[last:]
     tail = re.sub(r'(?<!\\)%','\\%', tail)
     tail = re.sub(r'(?<!\\)_','\\_', tail)
@@ -63,7 +56,6 @@ def _ensure_full_document(lt_text: str) -> str:
     # Remove triple-backtick fences from LLM output if present
     if t.startswith("```"):
         lines = t.splitlines()
-        # remove first fence line and drop last fence if present
         if len(lines) >= 2:
             lines = lines[1:]
             if lines and lines[-1].strip().startswith("```"):
@@ -73,9 +65,36 @@ def _ensure_full_document(lt_text: str) -> str:
     # Lightly escape problem characters outside math
     t = _escape_percent_underscore_outside_math(t)
 
+    # --- SANITIZE known-bad / uncommon packages that may not be installed ---
+    # Remove the problematic 'thmstyle' package (observed from logs), and any exact matches
+    t_before = t
+    t = re.sub(r'\\usepackage(\[[^\]]*\])?\{thmstyle\}', r'% removed unsupported package: thmstyle', t, flags=re.IGNORECASE)
+
+    # If the LLM inserted other nonstandard package lines that might break compilation,
+    # we leave them alone except for a small whitelist approach can be added later if needed.
+    if t != t_before:
+        logger.info("Sanitized nonstandard package directives from LaTeX source (e.g., thmstyle).")
+
+    # Detect if the document already has a \documentclass
     has_docclass = r"\documentclass" in t
 
-    # If no \documentclass, create a minimal wrapper with useful packages
+    # Detect theorem-like environments used by the document
+    theorem_envs = ["theorem", "lemma", "proposition", "corollary", "definition", "remark", "claim", "example"]
+    begins = re.findall(r'\\begin\{([a-zA-Z*]+)\}', t)
+    found_envs = set(e for e in begins if e in theorem_envs)
+
+    # Helper: check whether a \newtheorem for env exists already in text
+    def has_newtheorem(env_name: str, text: str) -> bool:
+        pat = re.compile(r'\\newtheorem\s*\{\s*' + re.escape(env_name) + r'\s*\}', re.IGNORECASE)
+        return bool(pat.search(text))
+
+    missing_newtheorems = []
+    for env in sorted(found_envs):
+        if not has_newtheorem(env, t):
+            display = env.capitalize()
+            missing_newtheorems.append(r"\newtheorem{" + env + r"}{" + display + r"}")
+
+    # If no \documentclass, create a minimal wrapper and include packages + newtheorems
     if not has_docclass:
         pre = [
             r"\documentclass[11pt]{article}",
@@ -88,55 +107,50 @@ def _ensure_full_document(lt_text: str) -> str:
             r"\usepackage{fontspec}",
             r"\geometry{margin=1in}",
             r"\setmainfont{Latin Modern Roman}",
-            r"\begin{document}",
         ]
+        # If any theorem-like envs are present, append their \newtheorem definitions
+        if missing_newtheorems:
+            pre.extend(missing_newtheorems)
+
+        pre.append(r"\begin{document}")
         doc = "\n".join(pre) + "\n\n" + t
         if r"\end{document}" not in doc:
             doc += "\n\n\\end{document}\n"
-        if re.search(r'\\begin\{theorem\}', doc):
-            if r'\usepackage{amsthm}' not in doc:
-                doc = doc.replace(r"\begin{document}", r"\usepackage{amsthm}" + "\n" + r"\begin{document}")
-            if r'\newtheorem{theorem}' not in doc:
-                doc = doc.replace(r"\begin{document}", r"\newtheorem{theorem}{Theorem}" + "\n" + r"\begin{document}")
         return doc
 
     # If the doc already has \documentclass: attempt to inject missing packages/defs
-    # We will insert packages before \begin{document}
-    needed_pkgs = []
-    body = t
+    needed_inserts = []
 
-    # Common macros -> packages
-    if re.search(r'\\mathbb\b', t) and ("\\usepackage{amsfonts}" not in t and "\\usepackage{amssymb}" not in t):
-        needed_pkgs.append(r"\usepackage{amsfonts}")
-    if re.search(r'\\mathscr\b', t) and "\\usepackage{mathrsfs}" not in t:
-        needed_pkgs.append(r"\usepackage{mathrsfs}")
-    if re.search(r'\\mathcal\b', t) and "\\usepackage{mathrsfs}" not in t:
-        # mathcal usually builtin, but keep it safe
-        pass
-    if re.search(r'\\begin\{theorem\}', t) or re.search(r'\\begin\{lemma\}', t) or re.search(r'\\begin\{proposition\}', t):
-        if "\\usepackage{amsthm}" not in t:
-            needed_pkgs.append(r"\usepackage{amsthm}")
-        # add defaults for theorem-like envs if not defined
-        if r'\newtheorem{theorem}' not in t:
-            # we'll add one default theorem environment
-            needed_pkgs.append(r"\newtheorem{theorem}{Theorem}")
+    # Ensure amsthm if theorem-like envs were detected and amsthm isn't present
+    if missing_newtheorems and "\\usepackage{amsthm}" not in t:
+        needed_inserts.append(r"\usepackage{amsthm}")
+    # Add any missing newtheorem definitions
+    for nt in missing_newtheorems:
+        if nt not in t:
+            needed_inserts.append(nt)
+
     # Ensure enumitem if itemize/enumerate used
     if "\\begin{itemize}" in t and "\\usepackage{enumitem}" not in t:
-        needed_pkgs.append(r"\usepackage{enumitem}")
+        needed_inserts.append(r"\usepackage{enumitem}")
 
-    if needed_pkgs:
+    # Common macros -> packages
+    if "\\mathbb" in t and ("\\usepackage{amsfonts}" not in t and "\\usepackage{amssymb}" not in t):
+        needed_inserts.append(r"\usepackage{amsfonts}")
+
+    if needed_inserts:
         idx = t.find(r"\begin{document}")
         if idx != -1:
-            insert_block = "\n".join(needed_pkgs) + "\n"
+            insert_block = "\n".join(needed_inserts) + "\n"
             t = t[:idx] + insert_block + t[idx:]
         else:
-            t = "\n".join(needed_pkgs) + "\n" + t
+            t = "\n".join(needed_inserts) + "\n" + t
 
     # Ensure \end{document} present
     if r"\end{document}" not in t:
         t = t + "\n\n\\end{document}\n"
 
     return t
+
 
 def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) -> str:
     """
@@ -181,9 +195,10 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
                         shutil.copy(tex_path, debug_tex_path)
                         # optionally copy the full tmpdir to out_dir/<prefix>-debug for deeper inspection
                         debug_folder = Path(out_dir) / f"{filename_prefix}-latex-debug"
-                        if not debug_folder.exists():
-                            shutil.copytree(tmpdir, str(debug_folder))
-                            logger.info("Saved latex debug folder to %s", debug_folder)
+                        if debug_folder.exists():
+                            shutil.rmtree(debug_folder)
+                        shutil.copytree(tmpdir, str(debug_folder))
+                        logger.info("Saved latex debug folder to %s", debug_folder)
                     except Exception:
                         logger.exception("Failed to save latex debug artifacts")
                     return ""
