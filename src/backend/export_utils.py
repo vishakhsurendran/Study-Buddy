@@ -1,4 +1,4 @@
-# export_utils.py (supabase upload aware)
+# export_utils.py
 import logging
 import os
 import re
@@ -6,11 +6,11 @@ import shutil
 import subprocess
 import tempfile
 import time
-import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 def write_markdown(md_text: str, out_dir: str, filename_prefix: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
@@ -18,45 +18,45 @@ def write_markdown(md_text: str, out_dir: str, filename_prefix: str) -> str:
     md_path.write_text(md_text, encoding="utf-8")
     return str(md_path)
 
+
 def write_latex(latex_text: str, out_dir: str, filename_prefix: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
     tex_path = Path(out_dir) / f"{filename_prefix}.tex"
     tex_path.write_text(latex_text, encoding="utf-8")
     return str(tex_path)
 
+
 def _escape_percent_underscore_outside_math(text: str) -> str:
     """
-    Naive escape: escapes '%' and '_' that are not already escaped and are outside inline ($...$)
-    or display (\[...\] or $$...$$) math.
+    Escapes % and _ outside simple math regions.
+    This is intentionally conservative and lightweight.
     """
     parts = []
     last = 0
     math_pat = re.compile(r'(\$\$.*?\$\$|\$.*?\$|\\\[.*?\\\]|\\\(.*?\\\))', re.DOTALL)
+
     for m in math_pat.finditer(text):
         non_math = text[last:m.start()]
-        non_math = re.sub(r'(?<!\\)%','\\%', non_math)
-        non_math = re.sub(r'(?<!\\)_','\\_', non_math)
+        non_math = re.sub(r'(?<!\\)%', r'\\%', non_math)
+        non_math = re.sub(r'(?<!\\)_', r'\\_', non_math)
         parts.append(non_math)
         parts.append(m.group(0))
         last = m.end()
+
     tail = text[last:]
-    tail = re.sub(r'(?<!\\)%','\\%', tail)
-    tail = re.sub(r'(?<!\\)_','\\_', tail)
+    tail = re.sub(r'(?<!\\)%', r'\\%', tail)
+    tail = re.sub(r'(?<!\\)_', r'\\_', tail)
     parts.append(tail)
     return "".join(parts)
 
 
 def _ensure_full_document(lt_text: str) -> str:
     """
-    If the model output is a fragment (no \\documentclass), wrap it with a minimal preamble.
-    If it already contains \\documentclass, leave as-is but ensure \\end{document} present.
+    Ensures the LaTeX is a compilable document.
+    Removes unsupported package directives and injects theorem definitions when needed.
     """
-    t = lt_text or ""
-    t = t.strip()
+    t = (lt_text or "").strip()
 
-    t = re.sub(r'\\chapter(\s*\{)', r'\\section\1', t)
-
-    # If it's a fenced code block, strip triple backticks
     if t.startswith("```"):
         lines = t.splitlines()
         if len(lines) >= 2:
@@ -65,12 +65,31 @@ def _ensure_full_document(lt_text: str) -> str:
                 lines = lines[:-1]
         t = "\n".join(lines).strip()
 
-    # remove \document class if it already exists
-    t = re.sub(r'\\documentclass(\[[^\]]*\])?\{[^}]*\}\s*', '', t)
-    t = re.sub(r'\\begin\{document\}', '', t)
-    t = re.sub(r'\\usepackage(\[[^\]]*\])?\{[^}]*\}\s*', '', t)
-    # Ensure we have \end{document}
-    if r"\documentclass" not in t:
+    t = _escape_percent_underscore_outside_math(t)
+
+    # Remove unsupported package if the model adds it
+    t = re.sub(r'\\usepackage(\[[^\]]*\])?\{thmstyle\}', r'% removed unsupported package: thmstyle', t)
+
+    theorem_envs = [
+        "theorem",
+        "lemma",
+        "proposition",
+        "corollary",
+        "definition",
+        "remark",
+        "claim",
+        "example",
+    ]
+
+    found_envs = set(re.findall(r'\\begin\{([a-zA-Z*]+)\}', t))
+    missing_newtheorems = []
+    for env in theorem_envs:
+        if env in found_envs and re.search(r'\\newtheorem\s*\{' + re.escape(env) + r'\}', t) is None:
+            missing_newtheorems.append(r"\newtheorem{" + env + r"}{" + env.capitalize() + r"}")
+
+    has_docclass = r"\documentclass" in t
+
+    if not has_docclass:
         pre = [
             r"\documentclass[11pt]{article}",
             r"\usepackage{amsmath}",
@@ -79,82 +98,53 @@ def _ensure_full_document(lt_text: str) -> str:
             r"\usepackage{amsthm}",
             r"\usepackage{enumitem}",
             r"\usepackage{geometry}",
-            r"\usepackage{amsfonts}",
-            r"\usepackage{fontspec}",  # works with xelatex/lualatex
-            r"\usepackage{amsthm}",
-            r"\newtheorem{theorem}{Theorem}",
-            r"\newtheorem{definition}{Definition}",
-            r"\newtheorem{proposition}{Proposition}",
-            r"\newtheorem{lemma}{Lemma}",
-            r"\newtheorem{example}{Example}",
+            r"\usepackage{fontspec}",
             r"\geometry{margin=1in}",
-            r"\usepackage{iftex}",
-            r"\ifXeTeX",
-            r"    \usepackage{fontspec}",
-            r"    \setmainfont{Latin Modern Roman}",
-            r"\else",
-            r"    \usepackage[T1]{fontenc}",
-            r"    \usepackage{lmodern}",
-            r"\fi",
-            r"\setmainfont{Latin Modern Roman}",  # safe default on many TeX installs
-            r"\begin{document}",
+            r"\setmainfont{Latin Modern Roman}",
         ]
-        # If any theorem-like envs are present, append their \newtheorem definitions
-        '''
-        if missing_newtheorems:
-            pre.extend(missing_newtheorems)
-        '''
+        pre.extend(missing_newtheorems)
         pre.append(r"\begin{document}")
         doc = "\n".join(pre) + "\n\n" + t
         if r"\end{document}" not in doc:
             doc += "\n\n\\end{document}\n"
         return doc
 
-    # If the doc already has \documentclass: attempt to inject missing packages/defs
-    needed_inserts = []
+    inserts = []
 
-    # Ensure amsthm if theorem-like envs were detected and amsthm isn't present
-    '''
-    if missing_newtheorems and "\\usepackage{amsthm}" not in t:
-        needed_inserts.append(r"\usepackage{amsthm}")
-    # Add any missing newtheorem definitions
+    if "\\usepackage{amsthm}" not in t and missing_newtheorems:
+        inserts.append(r"\usepackage{amsthm}")
+
     for nt in missing_newtheorems:
         if nt not in t:
-            needed_inserts.append(nt)
-    '''
-    # Ensure enumitem if itemize/enumerate used
+            inserts.append(nt)
+
     if "\\begin{itemize}" in t and "\\usepackage{enumitem}" not in t:
-        needed_inserts.append(r"\usepackage{enumitem}")
+        inserts.append(r"\usepackage{enumitem}")
 
-    # Common macros -> packages
-    if "\\mathbb" in t and ("\\usepackage{amsfonts}" not in t and "\\usepackage{amssymb}" not in t):
-        needed_inserts.append(r"\usepackage{amsfonts}")
+    if "\\mathbb" in t and "\\usepackage{amsfonts}" not in t and "\\usepackage{amssymb}" not in t:
+        inserts.append(r"\usepackage{amsfonts}")
 
-    if needed_inserts:
+    if inserts:
         idx = t.find(r"\begin{document}")
         if idx != -1:
-            insert_block = "\n".join(needed_inserts) + "\n"
-            t = t[:idx] + insert_block + t[idx:]
+            t = t[:idx] + "\n".join(inserts) + "\n" + t[idx:]
         else:
-            t = "\n".join(needed_inserts) + "\n" + t
+            t = "\n".join(inserts) + "\n" + t
 
-    # Ensure \end{document} present
     if r"\end{document}" not in t:
-        t = t + "\n\n\\end{document}\n"
+        t += "\n\n\\end{document}\n"
 
     return t
 
 
 def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) -> str:
     """
-    Create a PDF from the LaTeX source `lt_text`.
-    Returns path or URL (depending on your upload helper) or empty string on failure.
+    Compiles LaTeX to PDF locally.
+    Returns the local PDF path on success, or an empty string on failure.
     """
     try:
         full_doc = _ensure_full_document(lt_text)
-        # print(full_doc)
 
-        # Save the .tex to the out_dir for persistent debugging (useful in container mount)
         os.makedirs(out_dir, exist_ok=True)
         debug_tex_path = Path(out_dir) / f"{filename_prefix}.tex"
         debug_tex_path.write_text(full_doc, encoding="utf-8")
@@ -169,36 +159,44 @@ def try_make_pdf_from_latex(lt_text: str, out_dir: str, filename_prefix: str) ->
 
             try:
                 subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                # subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.run(cmd, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except subprocess.CalledProcessError as e:
-                # logger.info("xelatex failed, attempting pdflatex fallback: %s", e)
-                # logger.info("xelatex failed, attempting pdflatex fallback")
-                logger.info("xelatex failed")
-                print("STDOUT:\n", e.stdout)
-                print("STDERR:\n", e.stderr)
-                return ''
-                # fallback to pdflatex without fontspec (still may fail on unicode)
+                stdout = e.stdout.decode("utf-8", errors="replace") if e.stdout else ""
+                stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+                logger.info("xelatex failed: stdout:\n%s\nstderr:\n%s", stdout[:4000], stderr[:4000])
+
                 cmd2 = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
                 try:
                     subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    # subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except subprocess.CalledProcessError as e:
-                    logger.info("pdflatex failed")
-                    print("STDOUT:\n", e.stdout)
-                    print("STDERR:\n", e.stderr)
-                    return ''
-                
+                    subprocess.run(cmd2, cwd=tmpdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                except subprocess.CalledProcessError as e2:
+                    stdout2 = e2.stdout.decode("utf-8", errors="replace") if e2.stdout else ""
+                    stderr2 = e2.stderr.decode("utf-8", errors="replace") if e2.stderr else ""
+                    logger.error("pdflatex also failed: stdout:\n%s\nstderr:\n%s", stdout2[:4000], stderr2[:4000])
+
+                    try:
+                        debug_folder = Path(out_dir) / f"{filename_prefix}-latex-debug"
+                        if debug_folder.exists():
+                            shutil.rmtree(debug_folder)
+                        shutil.copytree(tmpdir, str(debug_folder))
+                        logger.info("Saved latex debug folder to %s", debug_folder)
+                    except Exception:
+                        logger.exception("Failed to save latex debug artifacts")
+
+                    return ""
 
             pdf_tmp = Path(tmpdir) / "doc.pdf"
             if not pdf_tmp.exists():
                 logger.error("PDF not created at expected path %s", pdf_tmp)
                 return ""
-            # move to final out_dir
+
             final_pdf = Path(out_dir) / f"{filename_prefix}.pdf"
             if final_pdf.exists():
                 final_pdf = Path(out_dir) / f"{filename_prefix}_{int(time.time())}.pdf"
+
             shutil.move(str(pdf_tmp), str(final_pdf))
             return str(final_pdf)
+
     except Exception as e:
         logger.exception("LaTeX -> PDF conversion failed: %s", e)
         return ""
