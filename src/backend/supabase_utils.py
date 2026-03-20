@@ -2,6 +2,10 @@ import os
 from supabase import create_client
 import logging
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")

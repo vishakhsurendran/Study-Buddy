@@ -1,6 +1,7 @@
 // ResultView.tsx
 import { Download, RefreshCw, CheckCircle2, Copy, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
+import PdfEmbed from './ui/pdf-embed';
 import { useState } from 'react';
 
 interface ResultViewProps {
@@ -111,7 +112,7 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl, pdfError }: 
             <div className="prose prose-blue max-w-none">
               <div className="bg-gray-50 rounded-lg p-8 border border-gray-200">
                 <pre className="whitespace-pre-wrap font-sans text-gray-800 leading-relaxed">
-                  {notes}
+                  <PdfEmbed url={pdfUrl}></PdfEmbed>
                 </pre>
               </div>
             </div>
