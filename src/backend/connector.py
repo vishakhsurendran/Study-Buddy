@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Any, Tuple
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from file_storage import StorageManager
 from info_sum import summarize_text
@@ -50,6 +51,24 @@ def _batch_texts_by_words(texts: List[str], max_words_per_batch: int) -> List[Li
         batches.append(cur)
     return batches
 
+# func used for parallelized requests
+def _process_batch(i, b, output_format):
+    joined = "\n\n".join(b)
+    summ = summarize_text(
+        joined,
+        output_format=output_format,
+        max_tokens=2000,
+        temperature=0.2
+    )
+
+    debug_info = {
+        "batch": i,
+        "words_in_batch": sum(len(x.split()) for x in b),
+        "summary_words": len(summ.split())
+    }
+
+    return i, summ, debug_info
+
 
 def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: str = "latex",
                          batch_words: int = 1200, hierarchical_final: bool = True, target_words: int = 800) -> Tuple[str, Dict[str, Any]]:
@@ -58,9 +77,22 @@ def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: s
         return "", {"steps": []}
 
     batches = _batch_texts_by_words(texts, batch_words)
-    batch_summaries = []
+    # batch_summaries = []
     debug = {"batches": len(batches), "batch_sizes": [len(b) for b in batches], "steps": []}
+    batch_summaries = [None] * len(batches)
 
+    with ThreadPoolExecutor(max_workers=5) as executor:  # adjust concurrency
+        futures = [
+            executor.submit(_process_batch, i, b, output_format)
+            for i, b in enumerate(batches)
+        ]
+
+        for future in as_completed(futures):
+            i, summ, debug_info = future.result()
+            batch_summaries[i] = summ
+            debug["steps"].append(debug_info)
+
+    ''' old code, serialized
     for i, b in enumerate(batches):
         joined = "\n\n".join(b)
         summ = summarize_text(joined, output_format=output_format, max_tokens=2000, temperature=0.2)
@@ -70,6 +102,7 @@ def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: s
             "words_in_batch": sum(len(x.split()) for x in b),
             "summary_words": len(summ.split())
         })
+    '''
 
     if len(batch_summaries) == 1 or not hierarchical_final:
         return batch_summaries[0], debug

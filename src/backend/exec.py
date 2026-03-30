@@ -13,6 +13,7 @@ EXPORT_DIR = "data/exports"
 
 # returns 0 on failure, 1 on success
 def run(files):
+    start = time.time()
     processed_file_ids = []
     out_format = 'latex'
     for p in files:
@@ -87,6 +88,8 @@ def run(files):
     else:
         print('NO COMBINED SUMMARY GENERATED')
 
+    end = time.time()
+    print(f'Elapsed time: {end-start:.2f}s')
     return 1
 
 if __name__ == "__main__":
