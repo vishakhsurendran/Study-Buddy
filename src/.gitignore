@@ -10,3 +10,5 @@ node_modules
 /src/backend/data
 /src/backend/.env
 /src/backend/uploads
+/.venv/
+/.vscode/
