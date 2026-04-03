@@ -92,6 +92,7 @@ setuptools==82.0.0
 shellingham==1.5.4
 six==1.17.0
 starlette==0.52.1
+supabase
 sympy==1.14.0
 tenacity==9.1.4
 threadpoolctl==3.6.0
