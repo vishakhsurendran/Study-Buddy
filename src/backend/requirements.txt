@@ -113,7 +113,7 @@ watchfiles==1.1.1
 weasyprint==68.1
 webencodings==0.5.1
 websocket-client==1.9.0
-websockets==16.0
+websockets==15.0.1
 xlsxwriter==3.2.9
 zipp==3.23.0
 zopfli==0.4.1
