@@ -1,4 +1,4 @@
-// src/App.tsx
+// src/frontend/app/App.tsx
 import { useState } from "react";
 import { FileUploader } from "./components/FileUploader";
 import { ProcessingView } from "./components/ProcessingView";
@@ -25,10 +25,9 @@ export default function App() {
 
     try {
       const fd = new FormData();
-      files.forEach((f) => fd.append("files", f)); // backend expects 'files'
+      files.forEach((f) => fd.append("files", f));
       fd.append("output_format", "latex");
 
-      // Use configured API_URL (works on localhost in dev, and points to Render in prod)
       const endpoint = `${API_URL}/process`;
       console.log("Posting to backend:", endpoint);
 
@@ -47,25 +46,16 @@ export default function App() {
 
       const data = await resp.json();
 
-      // if backend provided a PDF URL, save it
-      if (data.combined_pdf_url) {
-        setCombinedPdfUrl(data.combined_pdf_url);
-      } else {
-        setCombinedPdfUrl(null);
-        // capture any PDF error provided by the server
-        if (data.combined_pdf_error) {
-          setPdfError(data.combined_pdf_error);
-        }
-      }
+      setCombinedPdfUrl(data.combined_pdf_url ?? null);
+      setPdfError(data.combined_pdf_error ?? null);
 
-      // prefer combined_summary if available for text preview
       const combined =
         data.combined_summary ||
         (data.per_file && data.per_file.length
           ? data.per_file.map((p: any) => p.summary).join("\n\n")
           : "");
-      setGeneratedNotes(combined || "[No summary returned]");
 
+      setGeneratedNotes(combined || "[No summary returned]");
       setAppState("result");
     } catch (err) {
       console.error("Failed to process files", err);
@@ -84,9 +74,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {appState === "upload" && <FileUploader onFilesSelected={handleFilesSelected} />}
+      {appState === "upload" && (
+        <FileUploader onFilesSelected={handleFilesSelected} />
+      )}
 
-      {appState === "processing" && <ProcessingView fileCount={uploadedFiles.length} />}
+      {appState === "processing" && (
+        <ProcessingView fileCount={uploadedFiles.length} />
+      )}
 
       {appState === "result" && (
         <ResultView

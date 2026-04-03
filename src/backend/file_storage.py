@@ -1,4 +1,3 @@
-# file_storage.py
 import os
 import logging
 import time

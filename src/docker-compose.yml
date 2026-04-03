@@ -1,15 +1,14 @@
-# docker-compose.yml
 services:
   backend:
     build:
-      context: ./src/backend
+      context: ./backend
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./src/backend/data/exports:/app/data/exports
-      - ./src/backend/uploads:/app/uploads
+      - ./backend/data/exports:/app/data/exports
+      - ./backend/uploads:/app/uploads
     env_file:
-      - ./src/backend/.env
+      - ./backend/.env
     restart: unless-stopped
     

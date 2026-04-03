@@ -1,4 +1,3 @@
-# src/backend/Dockerfile
 FROM python:3.11-slim
 
 # Install system packages (LaTeX, tesseract, poppler etc. — adjust as needed)
