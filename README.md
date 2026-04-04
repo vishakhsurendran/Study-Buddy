@@ -15,17 +15,22 @@ Try the app here:
 
 ## Usage and Demo
 1. On the welcome page, click on the "Select Files" button to begin.
+![File Upload Page](src/demo-images/file_upload_page.png)
 
 2. Select relevant files in PDF, DOCX, or PPTX, up to 10 MB total.
+![File Select](src/demo-images/file_select.png)
 
 3. Once all desired files are selected, click on the "Generate AI Notes" button.
+![Files Uploaded](src/demo-images/uploaded.png)
 
 4. Wait for file processing and note generation to complete.
+![File Processing](src/demo-images/processing.png)
 
 5. Notes are generated! View the notes using the in-app PDF viewer. Click the "Copy to Clipboard" button to copy the note's as raw LaTeX. Once finished, click the "Process New Documents" button to return to the initial file upload page.
+![Notes Generated](src/demo-images/notes_generated.png)
 
 6. Alternatively, click the "Open PDF" button to open the PDF in a new tab, from where the notes can be downloaded.
-
+![PDF Viewer](src/demo-images/pdf_view.png)
 
 ## Tech Stack
 Frontend: 
