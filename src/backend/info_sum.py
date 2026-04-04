@@ -1,4 +1,3 @@
-# info_sum.py
 '''
 Function that takes in text and returns summarized notes, with bulletpoints and appropriate title and sections
 '''

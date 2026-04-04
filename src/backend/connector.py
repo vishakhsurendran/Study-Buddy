@@ -1,4 +1,4 @@
-# connector.py
+# /src/backend/connector.py
 import logging
 from typing import List, Dict, Any, Tuple
 import time
@@ -174,7 +174,7 @@ def summarize_multiple_files(file_ids: List[int], *, output_format: str = "latex
     # If latex output, try to write .tex, compile to PDF, and upload to Supabase (exports)
     if output_format.lower() == "latex" and combined_final and combined_final.strip():
         # use the container-local exports folder (matches server mount / exports static)
-        exports_dir = Path("data") / "exports"
+        exports_dir = Path(__file__).resolve().parent / "data" / "exports"
         ts = int(time.time())
         safe_name = f"combined_summary_{ts}"
         try:

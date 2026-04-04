@@ -1,3 +1,4 @@
+# src/.dockerignore
 # Git
 .git
 .gitignore
@@ -22,8 +23,8 @@ venv
 *.log
 
 # Local runtime directories that shouldn't be sent to Docker context
-src/backend/uploads
-src/backend/data/exports
+uploads
+data/exports
 
 # Frontend builds
 dist
