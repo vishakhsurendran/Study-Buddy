@@ -40,5 +40,5 @@ Try the app here:
 
 6. Alternatively, click the "Open PDF" button to open the PDF in a new tab, from where the notes can be downloaded.
 <p align="center">
-  <img src="src/demo-images/pdf_view.png"/>
+  <img src="src/demo-images/pdf_view.jpeg"/>
 </p>
