@@ -42,15 +42,3 @@ Try the app here:
 <p align="center">
   <img src="src/demo-images/pdf_view.png"/>
 </p>
-
-## Tech Stack
-Frontend: 
-- React
-- TypeScript
-
-Backend: 
-- Node.js / Express
-- Python
-
-Infrastructure: 
-- Docker
