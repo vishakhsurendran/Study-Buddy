@@ -8,6 +8,10 @@ from file_storage import StorageManager
 import uvicorn
 import os
 import logging
+import time
+
+# max total file size allowed
+MAX_TOTAL_SIZE = 10 * 1024 * 1024  # 10 MB
 
 from processing import process_file_bytes
 from connector import summarize_multiple_files
@@ -59,22 +63,35 @@ async def process_files(request: Request, files: List[UploadFile] = File(...), o
         raise HTTPException(status_code=400, detail="No files uploaded")
 
     file_ids = []
+    total_size = 0
 
     try:
         for uploaded in files:
             b = await uploaded.read()
+            size = len(b)
+            total_size += size
+            # check if file exceeds limit
+            if total_size > MAX_TOTAL_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Total upload size exceeds the 10 MB limit",
+                )
+            
             summary = process_file_bytes(b, uploaded.filename, content_type=uploaded.content_type or "")
             if "file_id" not in summary:
                 logger.error("Processing failed for %s: %s", uploaded.filename, summary)
                 raise HTTPException(status_code=500, detail=f"Processing failed for {uploaded.filename}")
             file_ids.append(summary["file_id"])
 
+        start = time.time()
         combined = summarize_multiple_files(
             file_ids,
             output_format=output_format,
             batch_words=1200,
             hierarchical=True
         )
+        end = time.time()
+        logger.info(f'Time elapsed: {end - start:.2f}')
 
         combined_summary = combined.get("combined", {}).get("summary", "")
         per_file = combined.get("per_file", [])

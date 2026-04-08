@@ -47,11 +47,32 @@ export function FileUploader({ onFilesSelected }: FileUploaderProps) {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const MAX_TOTAL_SIZE = 10 * 1024 * 1024;
+  const [error, setError] = useState<string | null>(null);
   const handleGenerate = () => {
-    if (selectedFiles.length > 0) {
-      onFilesSelected(selectedFiles);
+    setError(null);
+
+    if (selectedFiles.length === 0) {
+      setError('Please select at least one file.');
+      return;
     }
+
+    const totalSize = selectedFiles.reduce(
+      (sum, file) => sum + file.size,
+      0
+    );
+
+    if (totalSize > MAX_TOTAL_SIZE) {
+      setError(
+        `Total file size exceeds 10 MB. Current total: ${(totalSize / 1024 / 1024).toFixed(2)} MB`
+      );
+      return;
+    }
+
+    onFilesSelected(selectedFiles);
   };
+  const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+  const isValid = selectedFiles.length > 0 && totalSize <= MAX_TOTAL_SIZE;
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -114,6 +135,15 @@ export function FileUploader({ onFilesSelected }: FileUploaderProps) {
             <p className="text-sm text-gray-400 mt-4">
               Supported formats: PDF, DOCX, PPTX
             </p>
+            <p className="text-sm mt-3 text-gray-500">
+              Total size: {(totalSize / 1024 / 1024).toFixed(2)} MB / 10 MB
+            </p>
+
+            {totalSize > MAX_TOTAL_SIZE && (
+              <p className="text-sm text-red-600 mt-1">
+                Total file size exceeds 10 MB limit
+              </p>
+            )}
           </div>
 
           {selectedFiles.length > 0 && (
@@ -150,7 +180,12 @@ export function FileUploader({ onFilesSelected }: FileUploaderProps) {
 
               <Button
                 onClick={handleGenerate}
-                className="w-full mt-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white py-6"
+                disabled={!isValid}
+                className={`w-full mt-6 py-6 text-white ${
+                  isValid
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
+                    : 'bg-gray-300 cursor-not-allowed'
+                }`}
               >
                 Generate AI Notes
               </Button>
