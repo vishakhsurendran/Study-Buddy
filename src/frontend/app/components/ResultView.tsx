@@ -101,7 +101,7 @@ export function ResultView({ notes, fileCount, onStartOver, pdfUrl, pdfError }: 
                 <div className="font-semibold">PDF generation/upload issue</div>
                 <div className="text-sm mt-1">{pdfError}</div>
                 <div className="text-xs text-gray-500 mt-1">
-                  The server returned a problem while creating or uploading the PDF. You may still download the notes as a text file above, or check the server logs for details.
+                  The server returned a problem while creating or uploading the PDF. Please try generating notes again.
                 </div>
               </div>
             </div>

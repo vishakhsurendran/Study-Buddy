@@ -81,7 +81,8 @@ def summarize_large_text(chunks_provenance_texts: List[str], *, output_format: s
     debug = {"batches": len(batches), "batch_sizes": [len(b) for b in batches], "steps": []}
     batch_summaries = [None] * len(batches)
 
-    with ThreadPoolExecutor(max_workers=5) as executor:  # adjust concurrency
+    logger.info('Running with 10 threads.')
+    with ThreadPoolExecutor(max_workers=10) as executor:  # adjust concurrency
         futures = [
             executor.submit(_process_batch, i, b, output_format)
             for i, b in enumerate(batches)
