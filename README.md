@@ -38,7 +38,7 @@ Try the app here:
   <img src="src/demo-images/notes_generated.png"/>
 </p>
 
-6. Alternatively, click the "Open PDF" button to open the PDF in a new tab, from where the notes can be downloaded.
+6. Alternatively, click the "Open PDF" button to open the PDF in a new tab, from where the notes can also be downloaded or printed.
 <p align="center">
   <img src="src/demo-images/pdf_view.jpeg"/>
 </p>
