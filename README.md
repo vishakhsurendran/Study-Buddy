@@ -33,7 +33,7 @@ Try the app here:
   <img src="src/demo-images/processing.png"/>
 </p>
 
-5. Notes are generated! View the notes using the in-app PDF viewer. Click the "Copy to Clipboard" button to copy the note's as raw LaTeX. Once finished, click the "Process New Documents" button to return to the initial file upload page.
+5. Notes are generated! View the notes using the in-app PDF viewer. Click the "Copy to Clipboard" button to copy the notes as raw LaTeX. Once finished, click the "Process New Documents" button to return to the initial file upload page.
 <p align="center">
   <img src="src/demo-images/notes_generated.png"/>
 </p>
